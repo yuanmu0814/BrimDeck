@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     defaults:
       run:
         shell: pwsh
@@ -42,6 +42,12 @@ jobs:
         run: |
           dotnet build BrimDeck.sln -c Release
           if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+      - name: Build pinned AI activity engine
+        run: ./scripts/Build-PacerEngine.ps1
+      - name: AI activity integration
+        run: |
+          dotnet run --project tests/BrimDeck.ActivityTests -c Release -- .artifacts/pacer-engine/PacerEngine.exe
+          if ($LASTEXITCODE -ne 0) { throw 'AI activity integration failed.' }
       - name: Core tests
         run: |
           dotnet run --project tests/BrimDeck.Tests -c Release --no-build

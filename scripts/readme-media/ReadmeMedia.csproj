@@ -13,5 +13,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\BrimDeck\BrimDeck.csproj" />
+    <Content Include="ai-activity-fixture.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

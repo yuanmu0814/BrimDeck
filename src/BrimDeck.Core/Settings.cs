@@ -348,6 +348,9 @@ public sealed class DeckSettings
     public bool NotchSummary { get; set; } = true;
     public bool NotchMusic { get; set; } = true;
     public bool CapsuleSummary { get; set; } = true;
+    public bool AiActivityEnabled { get; set; } = true;
+    public bool AiHideTaskTitles { get; set; }
+    public int AiRetentionMinutes { get; set; } = 60;
     // Writes each application's first letter (or digit) of its name inside its collapsed quota ring, in the notch, the capsule and
     // the side column. Off by default; a file without it reads as off.
     public bool QuotaRingLetters { get; set; }

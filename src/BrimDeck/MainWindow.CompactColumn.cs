@@ -115,6 +115,11 @@ public partial class MainWindow
                 case CompactPart.Clock when clock is not null:
                     clock.Width = clock.ReservedWidth; Add(clock, clock.Height); _compactClock = clock; break;
             }
+            if (part == CompactPart.Rings && !notice && CompactActivity(scale, concise: true) is { } activity)
+            {
+                activity.Width = Math.Min(column, activity.Width);
+                Add(activity, activity.Height);
+            }
         }
         _columnStrips.AddRange(strips);
         _compactStrip = strips.FirstOrDefault();

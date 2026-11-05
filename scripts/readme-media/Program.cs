@@ -143,7 +143,85 @@ internal sealed class Renderer(App app, string output, string language, string[]
         if (scenes.Contains("music-sizes")) await MusicSizes();
         // Exercises the real panel's placement with synthetic data; no account or media session is read.
         if (scenes.Contains("screen-edges")) await ScreenEdges();
+        if (scenes.Contains("ai-activity")) await AiActivityScenes();
         Directory.Delete(folder, true);
+    }
+
+    private async Task AiActivityScenes()
+    {
+        var activity = AiActivitySnapshot.Parse(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "ai-activity-fixture.json")));
+        Program.SetProperty(app, "Activity", activity); Program.SetProperty(app, "ActivityState", "ready");
+        _settings.Animations = false; _settings.Style = CompactStyle.Capsule; _settings.PanelScale = 100;
+        _settings.CapsuleAutoWidth = true; _settings.CapsuleHeight = 32;
+        _settings.CapsuleOrder = [CompactPart.Music, CompactPart.Monitor, CompactPart.Equalizer, CompactPart.Clock, CompactPart.Rings];
+        _settings.Width = 760; _settings.Height = 360;
+        Program.Call(_deck, "SelectPage", [typeof(DeckPage), typeof(bool)], DeckPage.Usage, false);
+        var theme = Type.GetType("BrimDeck.PanelTheme, BrimDeck")!;
+        foreach (string palette in new[] { PanelThemes.Light, PanelThemes.Dark })
+        {
+            _settings.PanelTheme = palette; theme.GetMethod("Use", Program.Any)!.Invoke(null, [_settings, false, false]);
+            foreach (int scale in PanelScales.Choices)
+            {
+                _settings.PanelScale = scale;
+                Refresh(); _deck.SetExpanded(true, true);
+                Program.SetField(_deck, "_aiTasksPage", true); Program.SetField(_deck, "_aiProvider", null);
+                _deck.RenderUsage(); await Save($"ai-tasks-{palette}-{scale}", 1);
+                if (palette == PanelThemes.Light && scale == 100) await SaveAiIsland("ai-tasks-preview");
+                if (palette == PanelThemes.Light && scale == 100)
+                {
+                    var scroll = (System.Windows.Controls.ScrollViewer)Program.Field(_deck, "_aiScroll")!;
+                    scroll.ScrollToVerticalOffset(80); await Settle(); _deck.RenderUsage(); await Settle();
+                    if (((System.Windows.Controls.ScrollViewer)Program.Field(_deck, "_aiScroll")!).VerticalOffset < 1)
+                        throw new InvalidOperationException("A live AI refresh reset the task scroll position.");
+                }
+                if (scale == 100)
+                {
+                    foreach (string provider in AiActivity.Providers)
+                    {
+                        Program.SetField(_deck, "_aiProvider", provider); _deck.RenderUsage(); await Save($"ai-{provider}-{palette}", 1);
+                    }
+                    Program.SetField(_deck, "_aiTasksPage", false); Program.SetField(_deck, "_usageBuilt", null);
+                    _deck.RenderUsage(); await Save($"ai-usage-{palette}", 1);
+                    if (palette == PanelThemes.Light) await SaveAiIsland("ai-usage-preview");
+                }
+                _deck.SetExpanded(false, true); await Settle();
+                foreach (var (name, value) in new[]
+                {
+                    ("running", activity with { RunningCount = 3, WaitingCount = 0, Requests = [], RateIsFresh = true, TotalTokensPerSecond = 42 }),
+                    ("waiting", activity with { RunningCount = 2, WaitingCount = 1 }),
+                    ("idle", AiActivitySnapshot.Empty)
+                })
+                {
+                    Program.SetProperty(app, "Activity", value); Refresh(); await Save($"ai-capsule-{name}-{palette}-{scale}", 1);
+                    if (palette == PanelThemes.Light && scale == 100 && name == "running") await SaveAiIsland("ai-capsule-preview");
+                    var panel = (System.Windows.Controls.StackPanel)_deck.FindName("CompactRings")!;
+                    var row = panel.Children.OfType<System.Windows.Controls.Grid>().First();
+                    if (name != "idle" && row.Children.OfType<FrameworkElement>().LastOrDefault() is not { } badge)
+                        throw new InvalidOperationException("Missing compact activity badge.");
+                }
+                Program.SetProperty(app, "Activity", activity);
+            }
+        }
+        _settings.PanelScale = 100; _settings.Style = CompactStyle.Notch;
+        foreach (var edge in new[] { ScreenEdge.Left, ScreenEdge.Right })
+        {
+            _settings.NotchEdge = edge; Refresh(); _deck.SetExpanded(false, true); await Settle();
+            await Save($"ai-column-{edge}", 1);
+        }
+        Console.WriteLine("PASS: AI task filters, quota page and compact states at both scales and themes.");
+    }
+
+    private async Task SaveAiIsland(string name)
+    {
+        await Settle();
+        var island = (FrameworkElement)_deck.FindName("Island")!;
+        var origin = island.TranslatePoint(new Point(), _stage);
+        const double scale = 2;
+        var bitmap = Capture(scale);
+        int x = Math.Max(0, (int)Math.Floor((origin.X - 12) * scale)), y = Math.Max(0, (int)Math.Floor((origin.Y - 12) * scale));
+        int right = Math.Min(bitmap.PixelWidth, (int)Math.Ceiling((origin.X + island.ActualWidth + 12) * scale));
+        int bottom = Math.Min(bitmap.PixelHeight, (int)Math.Ceiling((origin.Y + island.ActualHeight + 12) * scale));
+        Write(new CroppedBitmap(bitmap, new Int32Rect(x, y, right - x, bottom - y)), Path.Combine(output, name + ".png"));
     }
 
     private async Task ScreenEdges()

@@ -147,7 +147,7 @@ public partial class MainWindow
         if (_details || !Settings.UsagePage || Settings.EnabledApps.Count == 0) return null;
         var columns = DashboardUsage.Columns(Settings, Snapshots);
         if (columns.Count == 0) return null;
-        var fit = FitColumns(columns, ContentCanvas.Width, ContentCanvas.Height);
+        var fit = FitColumns(columns, ContentCanvas.Width, UsagePanelHeight);
         return new UsageBuild($"{fit.Layout.Tier}|{fit.Layout.Footer}|{fit.Inline}|{fit.Wide}|{fit.Count}", Snapshots, Settings, _applicationPage,
             string.Join(",", _quotaPages.OrderBy(page => page.Key).Select(page => $"{page.Key:N}:{page.Value}")), PanelTheme.Generation, Loc.Language,
             DateTime.Now.Ticks / TimeSpan.TicksPerMinute, VisualTreeHelper.GetDpi(this).DpiScaleY, _scale);
@@ -155,6 +155,7 @@ public partial class MainWindow
 
     public void RenderUsage()
     {
+        _app.PresentActivity(this, _expanded && IsUsagePage && _aiTasksPage && Settings.UsagePage);
         if (UsageContent is null) return;
         if (IsMusicPage) { RenderMusic(); return; }
         if (IsMonitorPage) { RenderMonitor(); return; }
@@ -165,7 +166,7 @@ public partial class MainWindow
         RefreshStatus();
         if (_detailPopup is not null) { _flippedColumn = null; return; }
         var build = ColumnsBuild();
-        if (build is not null && build == _usageBuilt && _usageHandover == Handover.None && UsageContent.Children.Count > 0)
+        if (!_aiTasksPage && build is not null && build == _usageBuilt && _usageHandover == Handover.None && UsageContent.Children.Count > 0)
         {
             // The page as it was built; another page may have taken the header meanwhile.
             ApplyHeader(_usageHeaderBuilt);
@@ -177,6 +178,7 @@ public partial class MainWindow
         string form = _usageForm;
         _handover.Hold(UsageContent);
         RenderUsagePage();
+        AddActivityNavigation();
         _usageBuilt = build; _usageHeaderBuilt = _header;
         if (motion == Handover.None && form.Length > 0 && form != _usageForm) motion = Handover.Morph;
         if (!shown) motion = Handover.None;
@@ -199,6 +201,7 @@ public partial class MainWindow
         ApplyHeader(UnfittedHeader(panelHeight));
         ClockLabel.Visibility = _details ? Visibility.Collapsed : Visibility.Visible;
         ModelToolbar.Visibility = _details ? Visibility.Visible : Visibility.Collapsed;
+        if (_aiTasksPage && !_details && Settings.UsagePage) { RenderActivityPage(); return; }
 
         // The compact rings may keep the data current while the AI usage page itself is switched off.
         IReadOnlyList<AppEntry> apps = Settings.UsagePage ? Settings.EnabledApps : [];
@@ -312,7 +315,7 @@ public partial class MainWindow
             ApplicationPages.Children.Add(controls); ApplicationPages.Visibility = Visibility.Visible;
         }
         // See FitColumns. A short last page leaves its remaining columns empty.
-        var (layout, inline, wide, count, columnWidth, views) = FitColumns(columns, ContentCanvas.Width, ContentCanvas.Height);
+        var (layout, inline, wide, count, columnWidth, views) = FitColumns(columns, ContentCanvas.Width, UsagePanelHeight);
         _usageForm = $"{layout.Tier}|{layout.Footer}|{inline}|{wide}|{count}";
         int first = _applicationPage * pageSize;
         columns = columns.Skip(first).Take(pageSize).ToList(); views = views.Skip(first).Take(pageSize).ToList();

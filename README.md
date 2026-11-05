@@ -26,6 +26,7 @@ A native Windows app built with C# and WPF, designed for performance and smoothn
 
 - **All quotas in one place**: Quotas for Claude, Codex, Cursor, Antigravity and more are shown in a single panel, so you no longer open each website, command line or app to check them.
 - **Quota checks made simple**: BrimDeck stays collapsed at the top of the screen. Move the pointer over it to open it, and move away to close it.
+- **Live AI tasks**: See local Codex, Claude Code and DeepSeek Harness task states, durations, output speeds and unread completions. Compact activity follows your existing AI region. See [AI activity](docs/ai-activity.md).
 - **Media control**: Preview and control the song that is playing inline; the cover, equalizer and lyrics follow the music. The equalizer can flow with the sound or show its pitch from low to high.
 - **System monitor**: CPU, memory, network speed and other readings stay in the notch or capsule, visible at a glance.
 - **No interruptions in full screen**: Hides automatically while you play full-screen games or watch full-screen video, so it never opens by accident. Adjustable in settings.
