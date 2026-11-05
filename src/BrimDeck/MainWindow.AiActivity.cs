@@ -131,6 +131,7 @@ public partial class MainWindow
             string title = _app.ActivityState switch
             {
                 "starting" => Loc.T("正在连接任务引擎…", "Connecting activity engine…"),
+                "reconnecting" => Loc.T("连接中断，正在自动重连…", "Connection lost. Reconnecting automatically…"),
                 "paused" => Loc.T("任务监测已暂停", "Task monitoring is paused"),
                 "missing" => Loc.T("此构建尚未包含任务引擎", "The activity engine is not included in this build"),
                 "stopped" => Loc.T("任务引擎已断开", "Activity engine disconnected"),
@@ -138,9 +139,12 @@ public partial class MainWindow
             };
             var empty = new StackPanel { Margin = new Thickness(10, 20, 10, 8), HorizontalAlignment = HorizontalAlignment.Center };
             empty.Children.Add(UI.Fixed(title, 14, 24, UI.Primary));
-            var help = UI.Fixed(_app.ActivityState == "missing"
-                ? Loc.T("请使用包含 Pacer 引擎的完整安装包。", "Use a complete package that includes the Pacer engine.")
-                : Loc.T("启动 Codex、Claude Code 或 DeepSeek Harness 后自动显示。", "Tasks appear when you use Codex, Claude Code or DeepSeek Harness."), 11, 20, UI.Secondary);
+            var help = UI.Fixed(_app.ActivityState switch
+            {
+                "missing" => Loc.T("请使用包含 Pacer 引擎的完整安装包。", "Use a complete package that includes the Pacer engine."),
+                "reconnecting" => Loc.T("连接恢复后会继续监测现有会话。", "Monitoring existing conversations will resume when connected."),
+                _ => Loc.T("启动 Codex、Claude Code 或 DeepSeek Harness 后自动显示。", "Tasks appear when you use Codex, Claude Code or DeepSeek Harness.")
+            }, 11, 20, UI.Secondary);
             help.TextWrapping = TextWrapping.Wrap; help.MaxWidth = Math.Max(100, ContentCanvas.Width - 100); empty.Children.Add(help);
             if (_app.ActivityState is "stopped" or "missing") empty.Children.Add(ActivityButton(Loc.T("重试", "Retry"), Loc.T("重新连接任务引擎", "Reconnect activity engine"), _app.RetryActivity));
             rows.Children.Add(empty);

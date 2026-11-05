@@ -1,0 +1,296 @@
+diff --git a/native/Sources/PacerCore/Activity.swift b/native/Sources/PacerCore/Activity.swift
+index ff11bf8..2cfabfa 100644
+--- a/native/Sources/PacerCore/Activity.swift
++++ b/native/Sources/PacerCore/Activity.swift
+@@ -353,8 +353,12 @@ public struct SessionActivity: Equatable, Sendable, Identifiable {
+     }
+ 
+     mutating func updateTitle(_ value: String?) {
+-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+-        title = trimmed?.isEmpty == false ? String(trimmed!.prefix(240)) : nil
++        // Keep Unicode trimming in Swift. Foundation's Windows trimmer can
++        // trap inside its character buffer for live Desktop thread titles.
++        if let trimmed = value?.drop(while: \.isWhitespace),
++           let end = trimmed.lastIndex(where: { !$0.isWhitespace }) {
++            title = String(trimmed[...end].prefix(240))
++        } else { title = nil }
+         titleWasExplicitlyCleared = false
+     }
+ 
+@@ -728,7 +732,7 @@ public struct SessionActivity: Equatable, Sendable, Identifiable {
+             if let origin = CodexSessionOrigin.sanitized(event) { setCodexOrigin(origin, at: date) }
+             if sourceHostID == nil, let path = event["localRolloutPath"] as? String { setCodexRollout(URL(fileURLWithPath: path)) }
+             updateParent(Self.parentID(in: event, provider: provider))
+-            if let name = event["name"] as? String, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
++            if let name = event["name"] as? String, !name.allSatisfy(\.isWhitespace) {
+                 updateTitle(name)
+             }
+             // App-server thread settings describe configuration for future
+diff --git a/native/Sources/PacerCore/ActivityLogWatcher.swift b/native/Sources/PacerCore/ActivityLogWatcher.swift
+index f88ddca..b9986ce 100644
+--- a/native/Sources/PacerCore/ActivityLogWatcher.swift
++++ b/native/Sources/PacerCore/ActivityLogWatcher.swift
+@@ -4,8 +4,9 @@ import Foundation
+ public struct ActivityFileEvent: Sendable {
+     public let requiresDiscovery: Bool
+     public let invalidated: Bool
+-    public init(requiresDiscovery: Bool = false, invalidated: Bool = false) {
+-        self.requiresDiscovery = requiresDiscovery; self.invalidated = invalidated
++    public let changedURL: URL?
++    public init(requiresDiscovery: Bool = false, invalidated: Bool = false, changedURL: URL? = nil) {
++        self.requiresDiscovery = requiresDiscovery; self.invalidated = invalidated; self.changedURL = changedURL
+     }
+ }
+ 
+@@ -26,17 +27,24 @@ public final class ActivityLogWatcher: @unchecked Sendable {
+     private var pending: DispatchWorkItem?
+     private var pendingSince: TimeInterval?
+     private var pendingEvents: [URL: Bool] = [:]
++    private var pendingFiles: Set<URL> = []
+     private var revision: UInt64 = 0
+     private var interval: TimeInterval
+     private let maximumDirectoryWatches: Int
+-    private let changed: @Sendable (Bool) -> Void
++    private let changed: @Sendable (Bool, [URL]) -> Void
+ 
+     public init(files: any PlatformFileSystem, events: any ActivityFileEvents,
+                 interval: TimeInterval = 5, maximumDirectoryWatches: Int = 4,
+-                changed: @escaping @Sendable (Bool) -> Void) {
++                changedFiles: @escaping @Sendable (Bool, [URL]) -> Void) {
+         self.files = files; self.events = events
+         self.interval = min(5, max(0.1, interval))
+-        self.maximumDirectoryWatches = min(99, max(1, maximumDirectoryWatches)); self.changed = changed
++        self.maximumDirectoryWatches = min(99, max(1, maximumDirectoryWatches)); self.changed = changedFiles
++    }
++    public convenience init(files: any PlatformFileSystem, events: any ActivityFileEvents,
++                            interval: TimeInterval = 5, maximumDirectoryWatches: Int = 4,
++                            changed: @escaping @Sendable (Bool) -> Void) {
++        self.init(files: files, events: events, interval: interval, maximumDirectoryWatches: maximumDirectoryWatches,
++                  changedFiles: { discover, _ in changed(discover) })
+     }
+     public func update(_ urls: [URL], interval: TimeInterval, flushPending: Bool = false) {
+         queue.async { [self] in
+@@ -63,6 +71,9 @@ public final class ActivityLogWatcher: @unchecked Sendable {
+     private func receive(_ event: ActivityFileEvent, url: URL, identity: UUID) {
+         guard sources[url]?.identity == identity else { return }
+         if event.invalidated { sources.removeValue(forKey: url)?.source.stop() }
++        if let file = event.changedURL, file.pathExtension.lowercased() == "jsonl", pendingFiles.count < 32 {
++            pendingFiles.insert(file)
++        }
+         pendingEvents[url] = (pendingEvents[url] ?? false) || event.requiresDiscovery
+         guard pending == nil else { return }
+         pendingSince = ProcessInfo.processInfo.systemUptime
+@@ -74,13 +85,14 @@ public final class ActivityLogWatcher: @unchecked Sendable {
+         let work = DispatchWorkItem { [weak self] in
+             guard let self, self.revision == token else { return }
+             let discover = self.pendingEvents.values.contains(true)
++            let files = Array(self.pendingFiles); self.pendingFiles.removeAll()
+             self.pendingEvents.removeAll(); self.pending = nil; self.pendingSince = nil
+-            self.changed(discover)
++            self.changed(discover, files)
+         }
+         pending = work; queue.asyncAfter(deadline: .now() + delay, execute: work)
+     }
+     private func cancelPending() {
+-        revision &+= 1; pending?.cancel(); pending = nil; pendingSince = nil
++        revision &+= 1; pending?.cancel(); pending = nil; pendingSince = nil; pendingFiles.removeAll()
+     }
+     public func stop() {
+         queue.async { [self] in
+diff --git a/native/Sources/PacerCore/LocalActivityReader.swift b/native/Sources/PacerCore/LocalActivityReader.swift
+index a8ba61c..5813135 100644
+--- a/native/Sources/PacerCore/LocalActivityReader.swift
++++ b/native/Sources/PacerCore/LocalActivityReader.swift
+@@ -31,7 +31,8 @@ public actor LocalActivityReader {
+ 
+     public func read(home: URL, now: Date = Date(), phaseAwareRate: Bool = false,
+                      excludingThreads: Set<String> = [], includeCoveredMetrics: Bool = false, metricsOnly: Bool = false,
+-                     subagentStates: [String: SessionActivity.SubagentEvidence] = [:]) -> (activities: [SessionActivity], watchURLs: [URL], excludedIDs: Set<String>, requests: [PendingAttentionRequest]) {
++                     subagentStates: [String: SessionActivity.SubagentEvidence] = [:],
++                     modifiedFiles: [URL] = []) -> (activities: [SessionActivity], watchURLs: [URL], excludedIDs: Set<String>, requests: [PendingAttentionRequest]) {
+         func retainingCompletion(_ cursor: Cursor) -> Cursor {
+             var value = cursor
+             if let id = value.activity.threadID, let evidence = subagentStates[id], evidence.state == "completed",
+@@ -74,6 +75,14 @@ public actor LocalActivityReader {
+             files = cursors.keys.map { ($0, cursors[$0]?.activity.lastObserved ?? .distantPast) }
+         }
+         let indexed = metricsOnly ? [] : SessionIndex.entries(home: home)
++        // A resumed rollout stays in its original date directory and may no
++        // longer be in the bounded index. Recursive watch facts provide a
++        // bounded path back into discovery without scanning all history.
++        let root = home.appendingPathComponent("sessions", isDirectory: true).standardizedFileURL.path + "/"
++        let resumed = Array(Set(modifiedFiles.filter {
++            $0.isFileURL && $0.pathExtension == "jsonl" && $0.standardizedFileURL.path.hasPrefix(root)
++        })).prefix(32)
++        for file in resumed where !files.contains(where: { $0.0 == file }) { files.append((file, now)) }
+         for entry in indexed {
+             let file = entry.url
+             let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+@@ -100,7 +109,7 @@ public actor LocalActivityReader {
+         var selected = metricsOnly ? Array(cursors.keys) : cursors.filter {
+             [.running, .waitingForInput].contains(projected($0.value).phase) && !covered($0.key)
+         }.map(\.key)
+-        let candidates = Array(files.sorted { $0.1 > $1.1 }.prefix(256).map(\.0))
++        let candidates = Array((Array(resumed) + files.sorted { $0.1 > $1.1 }.map(\.0).filter { !resumed.contains($0) }).prefix(256))
+         metadata = metadata.filter { candidates.contains($0.key) }
+         if !metricsOnly { for file in candidates {
+             let facts = signature(file)
+@@ -131,6 +140,13 @@ public actor LocalActivityReader {
+                 .map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+             ignoredIDs = Set(inherited.values.filter(\.isIgnoredCodexSession).map { $0.canonicalized().id })
+             selected.removeAll { file in metadata[file].flatMap { inherited[$0.activity.id] }?.isIgnoredCodexSession == true }
++            // Modified old sessions take a discovery slot ahead of idle
++            // history, even when the previous read filled all sixteen slots.
++            let resumedTasks = resumed.filter { file in
++                guard !covered(file), let value = metadata[file]?.activity else { return false }
++                return !value.isInternalReview && inherited[value.id]?.isIgnoredCodexSession != true
++            }
++            selected = Array((resumedTasks + selected.filter { !resumedTasks.contains($0) }).prefix(maxFiles))
+             for file in candidates {
+                 guard selected.count < maxFiles else { break }
+                 guard !covered(file), let value = metadata[file]?.activity, !value.isInternalReview,
+diff --git a/native/Sources/PacerCore/RuntimeEventState.swift b/native/Sources/PacerCore/RuntimeEventState.swift
+index cb70a1e..c23669a 100644
+--- a/native/Sources/PacerCore/RuntimeEventState.swift
++++ b/native/Sources/PacerCore/RuntimeEventState.swift
+@@ -176,7 +176,7 @@ struct RuntimeEventState: Sendable {
+                 return
+             }
+             let method = event["method"] as? String
+-            let hasName = (event["name"] as? String).map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
++            let hasName = (event["name"] as? String).map { !$0.allSatisfy(\.isWhitespace) } ?? false
+             if (method == "metadata" && hasName) ||
+                 (method == "thread/name/updated" && (event["name"] is String || event["name"] is NSNull)),
+                let update = SessionNameUpdate(value) {
+diff --git a/windows/EngineSupport/PacerEngine.swift b/windows/EngineSupport/PacerEngine.swift
+index 42f0a7a..9daee12 100644
+--- a/windows/EngineSupport/PacerEngine.swift
++++ b/windows/EngineSupport/PacerEngine.swift
+@@ -369,8 +369,13 @@ actor EngineRuntime {
+     private var refreshActivityMonitorsRequested = false
+     private var forceBalanceRequested = false
+     #if os(Windows)
+-    private lazy var logWatcher = ActivityLogWatcher { [weak self] discover in
+-        Task { await self?.refresh(discover: discover, refreshActivityMonitors: false) }
++    private var modifiedCodexFiles: Set<URL> = []
++    private lazy var logWatcher = ActivityLogWatcher(changedFiles: { [weak self] discover, files in
++        Task { await self?.codexLogsChanged(discover: discover, files: files) }
++    })
++    private func codexLogsChanged(discover: Bool, files: [URL]) async {
++        modifiedCodexFiles.formUnion(files.prefix(32 - min(32, modifiedCodexFiles.count)))
++        await refresh(discover: discover || !files.isEmpty, refreshActivityMonitors: false)
+     }
+     #endif
+     private let output: @Sendable (Data) -> Void
+@@ -1709,7 +1714,9 @@ actor EngineRuntime {
+                 available: true, transport: "demo", reason: nil) }
+         } else {
+             if enabled.contains(.codex) {
+-                let result = await codexReader.read(home: codexHome, now: date, phaseAwareRate: true, metricsOnly: !discover)
++                let modifiedFiles = Array(modifiedCodexFiles); modifiedCodexFiles.removeAll()
++                let result = await codexReader.read(home: codexHome, now: date, phaseAwareRate: true, metricsOnly: !discover,
++                    modifiedFiles: modifiedFiles)
+                 guard generation == revision else { return }
+                 inbox.remove(activityIDs: result.excludedIDs)
+                 current += result.activities; pending += result.requests
+diff --git a/windows/EngineSupport/WindowsActivityLogWatcher.swift b/windows/EngineSupport/WindowsActivityLogWatcher.swift
+index 9f99adb..a67c0d9 100644
+--- a/windows/EngineSupport/WindowsActivityLogWatcher.swift
++++ b/windows/EngineSupport/WindowsActivityLogWatcher.swift
+@@ -6,7 +6,8 @@ import CWindowsSupport
+ struct WindowsActivityLogWatcher: ActivityFileEvents {
+     private final class Signal: @unchecked Sendable {
+         let changed: @Sendable (ActivityFileEvent) -> Void
+-        init(_ changed: @escaping @Sendable (ActivityFileEvent) -> Void) { self.changed = changed }
++        let directory: URL?
++        init(_ changed: @escaping @Sendable (ActivityFileEvent) -> Void, directory: URL?) { self.changed = changed; self.directory = directory }
+     }
+     private final class Watch: ActivityFileWatch, @unchecked Sendable {
+         private let lock = NSLock()
+@@ -20,13 +21,15 @@ struct WindowsActivityLogWatcher: ActivityFileEvents {
+     }
+     func watch(_ url: URL, isDirectory: Bool,
+                changed: @escaping @Sendable (ActivityFileEvent) -> Void) -> (any ActivityFileWatch)? {
+-        let context = Unmanaged.passRetained(Signal(changed))
++        let context = Unmanaged.passRetained(Signal(changed, directory: isDirectory ? url : nil))
+         let path = WindowsFiles.wide(url)
+         let handle = path.withUnsafeBufferPointer {
+-            pacer_watch_directory($0.baseAddress, isDirectory ? 1 : 0, context.toOpaque(), { pointer, flags in
++            pacer_watch_directory($0.baseAddress, isDirectory ? 1 : 0, context.toOpaque(), { pointer, flags, name, length in
+                 guard let pointer else { return }
+-                Unmanaged<Signal>.fromOpaque(pointer).takeUnretainedValue().changed(
+-                    ActivityFileEvent(requiresDiscovery: flags & 2 != 0, invalidated: flags & 1 != 0))
++                let signal = Unmanaged<Signal>.fromOpaque(pointer).takeUnretainedValue()
++                let relative = name.flatMap { length > 0 ? String(decoding: UnsafeBufferPointer(start: $0, count: Int(length)), as: UTF16.self) : nil }
++                let file = relative.flatMap { signal.directory?.appendingPathComponent($0.replacingOccurrences(of: "\\", with: "/")).standardizedFileURL }
++                signal.changed(ActivityFileEvent(requiresDiscovery: flags & 2 != 0, invalidated: flags & 1 != 0, changedURL: file))
+             }, { pointer in
+                 if let pointer { Unmanaged<Signal>.fromOpaque(pointer).release() }
+             })
+@@ -37,6 +40,11 @@ struct WindowsActivityLogWatcher: ActivityFileEvents {
+ }
+ 
+ extension ActivityLogWatcher {
++    convenience init(interval: TimeInterval = 5, maximumDirectoryWatches: Int = 4,
++                     changedFiles: @escaping @Sendable (Bool, [URL]) -> Void) {
++        self.init(files: WindowsFileSystem(), events: WindowsActivityLogWatcher(), interval: interval,
++            maximumDirectoryWatches: maximumDirectoryWatches, changedFiles: changedFiles)
++    }
+     convenience init(interval: TimeInterval = 5, maximumDirectoryWatches: Int = 4,
+                      changed: @escaping @Sendable (Bool) -> Void) {
+         self.init(files: WindowsFileSystem(), events: WindowsActivityLogWatcher(), interval: interval,
+diff --git a/windows/Native/CWindowsSupport/DirectoryEvents.c b/windows/Native/CWindowsSupport/DirectoryEvents.c
+index 91f56e7..e07b88f 100644
+--- a/windows/Native/CWindowsSupport/DirectoryEvents.c
++++ b/windows/Native/CWindowsSupport/DirectoryEvents.c
+@@ -40,6 +40,7 @@ static void CALLBACK pacer_directory_changed(PTP_CALLBACK_INSTANCE instance, voi
+     (void)instance; (void)wait; (void)result;
+     PacerDirectoryWatch *watch = context;
+     int changed = 0, flags = 0;
++    unsigned char *names = NULL;
+     AcquireSRWLockExclusive(&watch->lock);
+     if (watch->stopped) { ReleaseSRWLockExclusive(&watch->lock); return; }
+     DWORD count = 0;
+@@ -71,9 +72,28 @@ static void CALLBACK pacer_directory_changed(PTP_CALLBACK_INSTANCE instance, voi
+             offset += entry->NextEntryOffset;
+         }
+     }
++    // Copy validated entries before rearming the overlapped OS buffer.
++    if (changed && !(flags & 1) && count > 0 && watch->filename == NULL) {
++        names = HeapAlloc(GetProcessHeap(), 0, count);
++        if (names == NULL) flags |= 2;
++        else CopyMemory(names, watch->buffer, count);
++    }
+     if (!(flags & 1) && !pacer_directory_read(watch)) { changed = 1; flags |= 3; }
+     ReleaseSRWLockExclusive(&watch->lock);
+-    if (changed) watch->callback(watch->context, flags);
++    if (changed && names != NULL && !(flags & 1)) {
++        DWORD offset = 0;
++        while (offset < count) {
++            const DWORD header = FIELD_OFFSET(FILE_NOTIFY_INFORMATION, FileName);
++            if (count - offset < header) break;
++            FILE_NOTIFY_INFORMATION *entry = (FILE_NOTIFY_INFORMATION *)(names + offset);
++            if (entry->FileNameLength % sizeof(WCHAR) != 0 || entry->FileNameLength > count - offset - header) break;
++            watch->callback(watch->context, flags, (const uint16_t *)entry->FileName, entry->FileNameLength / sizeof(WCHAR));
++            if (entry->NextEntryOffset == 0) break;
++            if (entry->NextEntryOffset < header || entry->NextEntryOffset > count - offset) break;
++            offset += entry->NextEntryOffset;
++        }
++    } else if (changed) watch->callback(watch->context, flags, NULL, 0);
++    if (names != NULL) HeapFree(GetProcessHeap(), 0, names);
+ }
+ 
+ void *pacer_watch_directory(const uint16_t *path, int is_directory, void *context,
+diff --git a/windows/Native/CWindowsSupport/include/CWindowsSupport.h b/windows/Native/CWindowsSupport/include/CWindowsSupport.h
+index 679ffd3..7654d8d 100644
+--- a/windows/Native/CWindowsSupport/include/CWindowsSupport.h
++++ b/windows/Native/CWindowsSupport/include/CWindowsSupport.h
+@@ -15,7 +15,7 @@ int pacer_remove_credential(const uint16_t *name);
+ int pacer_normalize_ipv6(const char *input, char *output, size_t capacity);
+ int64_t pacer_read_stdin(uint8_t *bytes, size_t capacity);
+ int pacer_named_semaphore_exists(const uint16_t *name);
+-typedef void (*pacer_change_callback)(void *context, int valid);
++typedef void (*pacer_change_callback)(void *context, int flags, const uint16_t *relative_name, size_t name_length);
+ /* flags: 1 invalidated, 2 directory entries changed. closed releases context. */
+ void *pacer_watch_directory(const uint16_t *path, int is_directory, void *context,
+                            pacer_change_callback callback, void (*closed)(void *));

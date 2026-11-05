@@ -13,6 +13,7 @@ namespace BrimDeck;
 internal sealed class PacerEngineClient : IDisposable
 {
     private readonly CancellationTokenSource lifetime = new();
+    private readonly object processGate = new();
     private readonly SemaphoreSlim writer = new(1);
     private readonly ConcurrentDictionary<string, TaskCompletionSource> pending = new();
     private readonly TaskCompletionSource hello = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -22,6 +23,11 @@ internal sealed class PacerEngineClient : IDisposable
     private long request;
     private ulong sequence;
     private bool disposed;
+    private long lastSnapshot;
+    internal bool IsResponsive => Volatile.Read(ref lastSnapshot) is var stamp && stamp != 0 && Stopwatch.GetElapsedTime(stamp) < TimeSpan.FromSeconds(20);
+    internal string? FailureCode { get; private set; }
+    internal string? FailureField { get; private set; }
+    internal int? ExitCode { get; private set; }
     internal event Action<AiActivitySnapshot>? Snapshot;
     internal event Action? Stopped;
 
@@ -42,13 +48,17 @@ internal sealed class PacerEngineClient : IDisposable
         { start.ArgumentList.Add("--time-zone"); start.ArgumentList.Add(zone); }
         else
         { start.ArgumentList.Add("--time-zone-offset"); start.ArgumentList.Add(((int)TimeZoneInfo.Local.GetUtcOffset(DateTimeOffset.Now).TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture)); }
-        job = new PacerJob();
         try
         {
-            child = Process.Start(start) ?? throw new IOException("Could not start activity engine.");
-            job.Attach(child);
-            reading = ReadAsync(child.StandardOutput.BaseStream);
-            errors = DrainErrorsAsync(child.StandardError.BaseStream);
+            lock (processGate)
+            {
+                if (disposed) throw new IOException("Activity engine stopped.");
+                job = new PacerJob();
+                child = Process.Start(start) ?? throw new IOException("Could not start activity engine.");
+                job.Attach(child);
+                reading = ReadAsync(child.StandardOutput.BaseStream);
+                errors = DrainErrorsAsync(child.StandardError.BaseStream);
+            }
             await hello.Task.WaitAsync(TimeSpan.FromSeconds(15), lifetime.Token).ConfigureAwait(false);
             await SendAsync("initialize", new
             {
@@ -63,14 +73,19 @@ internal sealed class PacerEngineClient : IDisposable
 
     internal async Task SendAsync(string method, object? parameters = null)
     {
-        if (disposed || child is not { HasExited: false } process) throw new IOException("Activity engine is stopped.");
+        Process process;
+        lock (processGate)
+        {
+            if (disposed || child is not { HasExited: false }) throw new IOException("Activity engine is stopped.");
+            process = child;
+        }
         string id = Interlocked.Increment(ref request).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var reply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         byte[] frame = JsonSerializer.SerializeToUtf8Bytes(new { protocolVersion = 1, id, method, @params = parameters });
         if (frame.Length > 64 * 1024) throw new InvalidDataException("Activity command is too large.");
         pending[id] = reply;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
+        timeout.CancelAfter(TimeSpan.FromSeconds(method == "initialize" ? 45 : 15));
         try
         {
             await writer.WaitAsync(timeout.Token).ConfigureAwait(false);
@@ -83,7 +98,9 @@ internal sealed class PacerEngineClient : IDisposable
             finally { writer.Release(); }
             await reply.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) { throw new IOException("Activity command timed out or was cancelled."); }
+        catch (OperationCanceledException) when (!lifetime.IsCancellationRequested) { throw new PacerCommandTimeoutException(); }
+        catch (OperationCanceledException) { throw new IOException("Activity engine stopped."); }
+        catch (ObjectDisposedException) { throw new IOException("Activity engine stopped."); }
         finally { pending.TryRemove(id, out _); }
     }
 
@@ -112,9 +129,16 @@ internal sealed class PacerEngineClient : IDisposable
                 }
             }
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException or OperationCanceledException or FormatException) { }
+        catch (Exception error) when (error is IOException or InvalidDataException or JsonException or InvalidOperationException or KeyNotFoundException or OperationCanceledException or FormatException)
+        {
+            FailureCode = error.GetType().Name;
+            if (error is JsonException json && json.Path is { Length: <= 128 } path && path.All(c => char.IsAsciiLetterOrDigit(c) || c is '$' or '.' or '[' or ']')) FailureField = path;
+        }
         finally
         {
+            try { if (child is { HasExited: true } process) ExitCode = process.ExitCode; }
+            catch (InvalidOperationException) { }
+            FailureCode ??= "endOfStream";
             hello.TrySetException(new IOException("Activity engine disconnected."));
             foreach (var value in pending.Values) value.TrySetException(new IOException("Activity engine disconnected."));
             job?.Dispose();
@@ -136,7 +160,7 @@ internal sealed class PacerEngineClient : IDisposable
                 if (!hello.Task.IsCompletedSuccessfully) throw new InvalidDataException("Activity snapshot before handshake.");
                 var value = AiActivitySnapshot.Parse(bytes);
                 if (value.Sequence <= sequence) throw new InvalidDataException("Out-of-order activity snapshot.");
-                sequence = value.Sequence; Snapshot?.Invoke(value); break;
+                sequence = value.Sequence; Volatile.Write(ref lastSnapshot, Stopwatch.GetTimestamp()); Snapshot?.Invoke(value); break;
             case "result":
                 if (frame.GetProperty("ok").GetBoolean() && frame.GetProperty("id").GetString() is { } id && pending.TryGetValue(id, out var reply)) reply.TrySetResult();
                 break;
@@ -152,18 +176,23 @@ internal sealed class PacerEngineClient : IDisposable
     {
         byte[] buffer = new byte[4096];
         try { while (await stream.ReadAsync(buffer, lifetime.Token).ConfigureAwait(false) > 0) { } }
-        catch (Exception error) when (error is IOException or OperationCanceledException) { }
+        catch (Exception error) when (error is IOException or OperationCanceledException or ObjectDisposedException) { }
     }
 
     public void Dispose()
     {
-        if (disposed) return;
-        disposed = true; lifetime.Cancel(); job?.Dispose();
-        try { if (child is { HasExited: false }) child.Kill(entireProcessTree: true); }
-        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
-        child?.Dispose();
+        lock (processGate)
+        {
+            if (disposed) return;
+            disposed = true; lifetime.Cancel(); job?.Dispose();
+            try { if (child is { HasExited: false }) child.Kill(entireProcessTree: true); }
+            catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            child?.Dispose();
+        }
     }
 }
 
 internal sealed class PacerCommandException(string code) : IOException("Activity command rejected.")
 { internal string Code { get; } = code; }
+
+internal sealed class PacerCommandTimeoutException() : IOException("Activity engine is busy.");

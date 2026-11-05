@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/BrimDeck.Core/BrimDeck.Core.csproj" />
     <Compile Include="../../src/BrimDeck/PacerEngineClient.cs" Link="PacerEngineClient.cs" />
+    <Compile Include="../../src/BrimDeck/PacerEngineConnection.cs" Link="PacerEngineConnection.cs" />
     <Compile Include="../../src/BrimDeck/PacerJob.cs" Link="PacerJob.cs" />
   </ItemGroup>
 </Project>

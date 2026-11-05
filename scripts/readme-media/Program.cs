@@ -176,6 +176,12 @@ internal sealed class Renderer(App app, string output, string language, string[]
                 }
                 if (scale == 100)
                 {
+                    Program.SetProperty(app, "Activity", AiActivitySnapshot.Empty);
+                    Program.SetProperty(app, "ActivityState", "reconnecting");
+                    Program.SetField(_deck, "_aiProvider", null);
+                    _deck.RenderUsage(); await Save($"ai-reconnecting-{palette}", 1);
+                    if (palette == PanelThemes.Light) await SaveAiIsland("ai-reconnecting-preview");
+                    Program.SetProperty(app, "Activity", activity); Program.SetProperty(app, "ActivityState", "ready");
                     foreach (string provider in AiActivity.Providers)
                     {
                         Program.SetField(_deck, "_aiProvider", provider); _deck.RenderUsage(); await Save($"ai-{provider}-{palette}", 1);

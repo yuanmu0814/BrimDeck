@@ -7,7 +7,7 @@ namespace BrimDeck;
 
 public partial class App
 {
-    private PacerEngineClient? _activityEngine;
+    private PacerEngineConnection? _activityEngine;
     internal AiActivitySnapshot Activity { get; private set; } = AiActivitySnapshot.Empty;
     internal string ActivityState { get; private set; } = "starting";
     internal string? ActivityActionMessage { get; private set; }
@@ -18,7 +18,7 @@ public partial class App
         bool before = _activityPresenting.Count > 0;
         if (present) _activityPresenting.Add(deck); else _activityPresenting.Remove(deck);
         bool after = _activityPresenting.Count > 0;
-        if (before != after) _ = ActivityCommandAsync("setExpanded", new { expanded = after });
+        if (before != after) _ = SetActivityExpandedAsync(after);
     }
 
     private void ApplyActivitySettings()
@@ -28,6 +28,7 @@ public partial class App
         if (configuration == _activityConfiguration) return;
         _activityConfiguration = configuration;
         _activityEngine?.Dispose(); _activityEngine = null;
+        ActivityActionMessage = null;
         Activity = AiActivitySnapshot.Empty;
         ActivityState = wanted ? "starting" : "paused";
         PublishActivity();
@@ -41,27 +42,39 @@ public partial class App
     {
         string executable = Path.Combine(AppContext.BaseDirectory, "Engine", "PacerEngine.exe");
         if (!File.Exists(executable)) { ActivityState = "missing"; PublishActivity(); return; }
-        var engine = new PacerEngineClient(); _activityEngine = engine;
+        string language = Loc.Language;
+        bool hideTitles = Settings.AiHideTaskTitles;
+        int retention = Settings.AiRetentionMinutes;
+        var engine = new PacerEngineConnection(client => client.StartAsync(executable, language, hideTitles, retention));
+        _activityEngine = engine;
         engine.Snapshot += snapshot => Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
             if (Exiting || _activityEngine != engine) return;
-            Activity = snapshot; ActivityState = "ready"; PublishActivity();
+            Activity = snapshot; ActivityState = "ready"; ActivityActionMessage = null; PublishActivity();
         });
-        engine.Stopped += () => Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        engine.StateChanged += state => Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
         {
             if (Exiting || _activityEngine != engine) return;
-            Activity = AiActivitySnapshot.Empty; ActivityState = "stopped"; PublishActivity();
+            if (state == "reconnecting") Activity = AiActivitySnapshot.Empty;
+            ActivityState = state; PublishActivity();
         });
         try
         {
-            await engine.StartAsync(executable, Loc.Language, Settings.AiHideTaskTitles, Settings.AiRetentionMinutes);
-            if (_activityEngine == engine && _activityPresenting.Count > 0) await engine.SendAsync("setExpanded", new { expanded = true });
+            await engine.SetExpandedAsync(_activityPresenting.Count > 0);
+            engine.Start();
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception or TimeoutException)
         {
             if (Exiting || _activityEngine != engine) return;
             engine.Dispose(); Activity = AiActivitySnapshot.Empty; ActivityState = "stopped"; PublishActivity();
         }
+    }
+
+    private async Task SetActivityExpandedAsync(bool expanded)
+    {
+        if (_activityEngine is not { } engine) return;
+        try { await engine.SetExpandedAsync(expanded); }
+        catch (IOException) { } // The connection supervises transport failures.
     }
 
     private void PublishActivity()
@@ -84,8 +97,8 @@ public partial class App
         {
             if (!Exiting && engine == _activityEngine)
             {
-                engine.Dispose(); _activityEngine = null; Activity = AiActivitySnapshot.Empty;
-                ActivityState = "stopped"; PublishActivity();
+                ActivityActionMessage = Loc.T("引擎忙碌或正在重连，请稍后重试。", "The engine is busy or reconnecting. Please try again shortly.");
+                PublishActivity();
             }
         }
     }
