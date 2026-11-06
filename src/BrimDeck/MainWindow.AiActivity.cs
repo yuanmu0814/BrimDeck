@@ -240,10 +240,19 @@ public partial class MainWindow
         string color = AiActivity.Failed(_app.Activity) > 0 ? PanelTheme.AppCritical(new AppEntry())
             : _app.Activity.WaitingCount > 0 || _app.Activity.Requests.Count > 0 ? PanelTheme.AppWarning(new AppEntry()) : UI.Accent;
         var label = UI.Fixed(text, 10 * scale, 16 * scale, color, FontWeights.SemiBold);
-        label.TextTrimming = TextTrimming.CharacterEllipsis;
+        label.TextTrimming = TextTrimming.None;
         var content = new Border { Child = label };
-        content.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        content.Width = Math.Ceiling(content.DesiredSize.Width); content.Height = Math.Ceiling(content.DesiredSize.Height);
+        // Measure in the window's DPI, typography and layout-rounding context.
+        // Measuring a detached label can reserve less than its attached text needs.
+        CompactRings.Children.Add(content);
+        try
+        {
+            content.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            content.Width = DevicePixels.Up(content.DesiredSize.Width, dpi);
+            content.Height = DevicePixels.Up(content.DesiredSize.Height, dpi);
+        }
+        finally { CompactRings.Children.Remove(content); }
         content.ToolTip = ActivityHelp; _activityBadge = content;
         AutomationProperties.SetName(content, Loc.T("AI 任务：", "AI tasks: ") + text);
         return content;

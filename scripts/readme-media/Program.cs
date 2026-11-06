@@ -144,7 +144,56 @@ internal sealed class Renderer(App app, string output, string language, string[]
         // Exercises the real panel's placement with synthetic data; no account or media session is read.
         if (scenes.Contains("screen-edges")) await ScreenEdges();
         if (scenes.Contains("ai-activity")) await AiActivityScenes();
+        if (scenes.Contains("ai-width")) await AiWidthScenes();
         Directory.Delete(folder, true);
+    }
+
+    private async Task AiWidthScenes()
+    {
+        var activity = AiActivitySnapshot.Parse(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "ai-activity-fixture.json")));
+        _settings.Style = CompactStyle.Capsule; _settings.CapsuleAutoWidth = true;
+        _settings.Animations = _settings.AiStatusAnimations = false;
+        _settings.CapsuleMonitor = true;
+        _settings.CapsuleMusic = _settings.CapsuleEqualizer = _settings.CapsuleClock = false;
+        _settings.CapsuleOrder = [CompactPart.Monitor, CompactPart.Rings, CompactPart.Music, CompactPart.Equalizer, CompactPart.Clock];
+        Program.SetProperty(app, "ActivityState", "ready");
+        double dpi = VisualTreeHelper.GetDpi(_deck).DpiScaleX;
+        int checks = 0;
+        var failures = new List<string>();
+        foreach (var formatting in new[] { TextFormattingMode.Ideal, TextFormattingMode.Display })
+        foreach (int scale in PanelScales.Choices)
+        foreach (double height in new[] { 24d, 32, 64 })
+        {
+            TextOptions.SetTextFormattingMode(_deck, formatting);
+            _settings.PanelScale = scale; _settings.CapsuleHeight = height;
+            bool first = true;
+            foreach (var (count, rate) in new (int, double?)[] { (4, 95), (12, 1295), (3, null), (1, 7), (1024, 999999), (1, 9) })
+            {
+                Program.SetProperty(app, "Activity", activity with { RunningCount = count, WaitingCount = 0, Requests = [], TotalTokensPerSecond = rate, RateIsFresh = rate is not null });
+                if (first) { Refresh(); _deck.SetExpanded(false, true); first = false; }
+                Program.Call(_deck, "MonitorUpdated", [typeof(MonitorSnapshot)], MonitorSample(checks));
+                Program.Call(_deck, "ActivityChanged", []); await Settle(); _stage.UpdateLayout();
+                var badge = (System.Windows.Controls.Border)Program.Field(_deck, "_activityBadge")!;
+                var label = (System.Windows.Controls.TextBlock)badge.Child;
+                if (Math.Abs(VisualTreeHelper.GetDpi(label).DpiScaleX - dpi) > .001)
+                    throw new InvalidOperationException("The width fixture's text and window have different DPI contexts.");
+                double shown = label.ActualWidth;
+                label.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                double wanted = label.DesiredSize.Width;
+                label.InvalidateMeasure();
+                var compact = (FrameworkElement)_deck.FindName("Compact")!;
+                var bounds = badge.TransformToAncestor(compact).TransformBounds(new Rect(badge.RenderSize));
+                if (shown + .01 < wanted || bounds.Right > compact.ActualWidth + .01 || bounds.Left < -.01)
+                {
+                    failures.Add($"{formatting}, DPI {dpi}/{VisualTreeHelper.GetDpi(label).DpiScaleX}, scale {scale}, height {height}: {label.Text}, shown {shown}, wanted {wanted}, badge {badge.Width}/{badge.ActualWidth}, right {bounds.Right}, row {compact.ActualWidth}");
+                }
+                checks++;
+                if (formatting == TextFormattingMode.Ideal && scale == 100 && height == 24 && (rate == 95 || rate is null))
+                    await SaveAiIsland(rate is null ? "ai-width-placeholder" : "ai-width-speed");
+            }
+        }
+        if (failures.Count > 0) throw new InvalidOperationException($"AI text clipped in {failures.Count}/{checks} transitions: " + string.Join("; ", failures.Take(12)));
+        Console.WriteLine($"PASS: {checks} live AI text width transitions across panel scales, capsule heights and text-formatting modes at {dpi * 100}% display DPI.");
     }
 
     private async Task AiActivityScenes()

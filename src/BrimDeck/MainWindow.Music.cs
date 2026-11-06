@@ -1057,13 +1057,15 @@ public partial class MainWindow
         double wanted = CompactMusicLayout.NaturalWidth(scale, media, steadyRings, steadyText, clock?.ReservedWidth ?? 0, strip?.PreferredWidth ?? 0, dpi, equalizer, Settings.EqualizerBars, showCover)
             + (activityIcon is null ? 0 : activityIcon.Width - layout.RingSize)
             + (activity is null ? 0 : activityWidth + CompactMusicLayout.Gap(scale));
+        wanted = DevicePixels.Up(wanted, dpi);
         // The surface is never narrower than what the row must show (CompactMusicLayout.RequiredWidth); like the width it asks
         // for, this leaves out the track notice, so the surface does not move for it.
         var readingWidths = strip?.ItemWidths() ?? [];
         double required = CompactMusicLayout.RequiredWidth(scale, media, steadyText, clock?.ReservedWidth ?? 0,
             activityIcon?.Width ?? (steadyRings > 0 ? Math.Max(1, CompactMusicLayout.Whole(12 * scale)) : 0), CompactSpacing.Minimum(readingWidths, strip?.Gap ?? 0), equalizer, Settings.EqualizerBars, showCover)
             + (activity is null ? 0 : activityWidth + CompactMusicLayout.Gap(scale));
-        if (double.IsNaN(_compactWanted) || Math.Abs(wanted - _compactWanted) > .5 || Math.Abs(required - _compactRequired) > .5)
+        required = DevicePixels.Up(required, dpi);
+        if (double.IsNaN(_compactWanted) || Math.Abs(wanted - _compactWanted) > .001 || Math.Abs(required - _compactRequired) > .001)
         { _compactWanted = wanted; _compactRequired = required; Dispatcher.BeginInvoke(DispatcherPriority.Background, FitCompactToContent); }
         double row = layout.RowHeight, unit = CompactMusicLayout.Gap(scale);
         var grid = new Grid { Width = SnapDown(contentWidth, dpi), Height = row };
