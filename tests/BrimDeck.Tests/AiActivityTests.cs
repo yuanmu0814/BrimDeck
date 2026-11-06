@@ -29,8 +29,8 @@ internal static class AiActivityTests
             try { AiActivitySnapshot.Parse(Encoding.UTF8.GetBytes(invalid)); } catch (Exception e) when (e is InvalidDataException or JsonException) { rejected = true; }
             check("AI rejects incomplete or incompatible snapshot " + invalid, rejected);
         }
-        var settings = new DeckSettings { AiActivityEnabled = false, AiHideTaskTitles = true, AiRetentionMinutes = 120 };
+        var settings = new DeckSettings { AiActivityEnabled = false, AiStatusAnimations = false, AiHideTaskTitles = true, AiRetentionMinutes = 120 };
         var copy = settings.Copy();
-        check("AI monitoring settings survive copying", !copy.AiActivityEnabled && copy.AiHideTaskTitles && copy.AiRetentionMinutes == 120);
+        check("AI monitoring settings survive copying", !copy.AiActivityEnabled && !copy.AiStatusAnimations && copy.AiHideTaskTitles && copy.AiRetentionMinutes == 120);
     }
 }

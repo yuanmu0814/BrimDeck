@@ -642,7 +642,7 @@ public sealed partial class SettingsWindow : Window
                 case MonitorSettingsPage:s.MonitorPalette=defaults.MonitorPalette;s.MonitorCustomColors=defaults.MonitorCustomColors;s.CompactWarningColor=null;s.CompactCriticalColor=null;s.CompactSmoothing=defaults.CompactSmoothing;s.MonitorInterval=defaults.MonitorInterval;s.MonitorProcesses=defaults.MonitorProcesses;s.MonitorSort=defaults.MonitorSort;s.MonitorMain=defaults.MonitorMain;s.MonitorProcessView=defaults.MonitorProcessView;
                     s.CompactMonitor=defaults.CompactMonitor;s.CompactMonitorItems=defaults.CompactMonitorItems;s.CompactReadings=defaults.CompactReadings;s.NotchAutoWidth=defaults.NotchAutoWidth;s.CapsuleAutoWidth=defaults.CapsuleAutoWidth;s.MonitorTemperatures=defaults.MonitorTemperatures;s.MonitorStorage=defaults.MonitorStorage;s.MonitorPower=defaults.MonitorPower;break;
                 // The current theme's application colors go back to its own; the other themes keep what was saved for them.
-                case 3:{var previous=s.Apps;s.QuotaAlerts=defaults.QuotaAlerts;s.IncludeWsl=defaults.IncludeWsl;s.Apps=defaults.Apps;PanelThemes.CarryAppChoices(s,previous);break;}
+                case 3:{var previous=s.Apps;s.QuotaAlerts=defaults.QuotaAlerts;s.IncludeWsl=defaults.IncludeWsl;s.AiActivityEnabled=defaults.AiActivityEnabled;s.AiStatusAnimations=defaults.AiStatusAnimations;s.AiHideTaskTitles=defaults.AiHideTaskTitles;s.AiRetentionMinutes=defaults.AiRetentionMinutes;s.Apps=defaults.Apps;PanelThemes.CarryAppChoices(s,previous);break;}
                 case 5:s.EqualizerAlways=defaults.EqualizerAlways;s.EqualizerBars=defaults.EqualizerBars;s.EqualizerMode=defaults.EqualizerMode;s.EqualizerColor=defaults.EqualizerColor;s.EqualizerCustomColor=defaults.EqualizerCustomColor;
                     s.MusicText=defaults.MusicText;s.MusicEqualizerBars=defaults.MusicEqualizerBars;s.MusicTrackNotice=defaults.MusicTrackNotice;s.MusicPausedHide=defaults.MusicPausedHide;s.MusicInstrumentalTitle=defaults.MusicInstrumentalTitle;s.MusicCompactCover=defaults.MusicCompactCover;s.MusicPageCover=defaults.MusicPageCover;s.LyricsEnabled=defaults.LyricsEnabled;
                     s.MusicLyricColor=defaults.MusicLyricColor;s.MusicLyricCustomColor=defaults.MusicLyricCustomColor;break;
@@ -709,6 +709,17 @@ public sealed partial class SettingsWindow : Window
     // Each row independently chooses its quota source, statistics source and dashboard name.
     private void Pages()
     {
+        SectionTitle(Loc.T("AI 实时任务", "Live AI tasks"));
+        var reconnect = ActionButton(Loc.T("重新连接", "Reconnect"), _app.RetryActivity);
+        reconnect.IsEnabled = S.AiActivityEnabled;
+        Group(Toggle(Loc.T("监测 AI 任务", "Monitor AI tasks"), S.AiActivityEnabled, v => { Change(s => s.AiActivityEnabled = v); ShowPage(3); }, help:
+                Loc.T("显示 Codex、Claude、DeepSeek 的实时任务。关闭后停止任务监测引擎。",
+                    "Show live Codex, Claude and DeepSeek tasks. Turning this off stops the activity engine.")),
+            Toggle(Loc.T("状态图标动画", "Animate status icons"), S.AiStatusAnimations, v => Change(s => s.AiStatusAnimations = v), S.AiActivityEnabled, help:
+                Loc.T("任务进行时，在额度环的位置显示思考、工具调用等状态图标。关闭动画后保留静态图标；没有任务进行时显示额度环。",
+                    "Show thinking, tool use and other task states in place of the quota rings. Turning animation off keeps static status icons. Quota rings return when tasks are idle.")),
+            Toggle(Loc.T("隐藏项目和任务名称", "Hide project and task names"), S.AiHideTaskTitles, v => Change(s => s.AiHideTaskTitles = v), S.AiActivityEnabled),
+            Row(Loc.T("任务引擎", "Activity engine"), reconnect));
         SectionTitle(Loc.T("提示", "Notifications"));
         Group(Toggle(Loc.T("预警和告警提示", "Warning and critical notices"), S.QuotaAlerts, v => Change(s => s.QuotaAlerts = v), help:
             Loc.T($"开启后，某个应用的已用比例升到预警（{AppPresets.WarningPercent:0}%）或告警（{AppPresets.CriticalPercent:0}%）时，收起的刘海或胶囊会短暂显示该应用的名称、已用比例和重置时间，约 5 秒后恢复。",

@@ -349,6 +349,7 @@ public sealed class DeckSettings
     public bool NotchMusic { get; set; } = true;
     public bool CapsuleSummary { get; set; } = true;
     public bool AiActivityEnabled { get; set; } = true;
+    public bool AiStatusAnimations { get; set; } = true;
     public bool AiHideTaskTitles { get; set; }
     public int AiRetentionMinutes { get; set; } = 60;
     // Writes each application's first letter (or digit) of its name inside its collapsed quota ring, in the notch, the capsule and

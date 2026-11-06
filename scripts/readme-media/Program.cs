@@ -160,7 +160,7 @@ internal sealed class Renderer(App app, string output, string language, string[]
             }
         };
         Program.SetProperty(app, "Activity", activity); Program.SetProperty(app, "ActivityState", "ready");
-        _settings.Animations = false; _settings.Style = CompactStyle.Capsule; _settings.PanelScale = 100;
+        _settings.Animations = false; _settings.AiStatusAnimations = false; _settings.Style = CompactStyle.Capsule; _settings.PanelScale = 100;
         _settings.CapsuleAutoWidth = true; _settings.CapsuleHeight = 32;
         _settings.CapsuleOrder = [CompactPart.Music, CompactPart.Monitor, CompactPart.Equalizer, CompactPart.Clock, CompactPart.Rings];
         _settings.Width = 760; _settings.Height = 360;
@@ -236,7 +236,7 @@ internal sealed class Renderer(App app, string output, string language, string[]
         // Exercise actual Loaded/Visible/Unloaded clocks independently of the
         // off-screen stills. Only invented data is ever attached to this host.
         _settings.Style = CompactStyle.Capsule; _settings.NotchEdge = ScreenEdge.Top;
-        _settings.PanelTheme = PanelThemes.Light; _settings.Animations = true;
+        _settings.PanelTheme = PanelThemes.Light; _settings.Animations = false; _settings.AiStatusAnimations = true;
         Program.SetProperty(app, "Activity", Stage("sparkle")); Refresh(); _deck.SetExpanded(false, true);
         Program.Call(_deck, "ActivityChanged", []);
         Program.SetProperty(app, "WindowDrags", Activator.CreateInstance(Type.GetType("BrimDeck.Native.WindowDrags, BrimDeck")!, true));
@@ -249,6 +249,11 @@ internal sealed class Renderer(App app, string output, string language, string[]
         if (!SystemParameters.ClientAreaAnimation)
             Program.Call(moving, "Update", [typeof(string), typeof(IReadOnlyDictionary<string, int>), typeof(Brush), typeof(bool)], "sparkle", new Dictionary<string, int> { ["codex"] = 1 }, Brushes.Black, true);
         if (!Motion(moving)) throw new InvalidOperationException("The active icon's animation clock did not start.");
+        _settings.AiStatusAnimations = false; Program.Call(_deck, "UpdateActivityIcon", [moving.GetType()], moving);
+        if (Motion(moving) || (string)moving.GetType().GetProperty("Symbol", Program.Any)!.GetValue(moving)! != "sparkle")
+            throw new InvalidOperationException("The AI animation setting did not retain a static status icon.");
+        _settings.AiStatusAnimations = true; Program.Call(_deck, "UpdateActivityIcon", [moving.GetType()], moving);
+        if (SystemParameters.ClientAreaAnimation && !Motion(moving)) throw new InvalidOperationException("The AI animation setting did not restart motion.");
         Program.SetProperty(app, "Activity", Stage("terminal")); Program.Call(_deck, "ActivityChanged", []); await Settle();
         if (!ReferenceEquals(moving, Program.Field(_deck, "_compactActivityIcon")) || (string)moving.GetType().GetProperty("Symbol", Program.Any)!.GetValue(moving)! != "terminal")
             throw new InvalidOperationException("A stage change with identical count and throughput did not update the existing icon.");

@@ -247,8 +247,17 @@ try
 
     string reconnectHome = Path.Combine(root, "reconnect"); Directory.CreateDirectory(reconnectHome);
     string fakeEngine = Environment.ProcessPath!;
-    using (var connection = new PacerEngineConnection(client => client.StartAsync(fakeEngine, "en-US", true, 120, codexHome: reconnectHome)))
+    var sentinelStart = new System.Diagnostics.ProcessStartInfo(fakeEngine)
     {
+        UseShellExecute = false, CreateNoWindow = true,
+        RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+    };
+    sentinelStart.ArgumentList.Add("--read-only-diagnostics");
+    using var sentinel = System.Diagnostics.Process.Start(sentinelStart)!;
+    try
+    {
+        await sentinel.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(12));
+        using var connection = new PacerEngineConnection(client => client.StartAsync(fakeEngine, "en-US", true, 120, codexHome: reconnectHome));
         var states = new ConcurrentQueue<string>();
         connection.StateChanged += states.Enqueue;
         await connection.SetExpandedAsync(true);
@@ -268,17 +277,33 @@ try
         await Until(() => Attempts() >= 3 && ReadFixture(expandedFile) == "true");
         Check("initialization exit and later crash both reconnect automatically", Attempts() == 3 && states.Count(state => state == "reconnecting") >= 2);
         Check("reconnect reapplies provider, privacy, retention and expanded demand", ReadFixture(expandedFile) == "true");
-        var busy = connection.SendAsync("testBusy");
+        string[] forbidden = ["prepareActivityOpen", "activateActivityHost", "completeActivityOpen", "retryClaudeSetup", "refreshRemoteControl", "turn/start", "thread/resume"];
+        foreach (string method in forbidden)
+        {
+            bool rejected = false;
+            try { await connection.SendAsync(method); }
+            catch (PacerCommandException error) { rejected = error.Code == "unsupportedObserverCommand"; }
+            if (!rejected) throw new InvalidOperationException("Observer accepted a control command: " + method);
+        }
+        Check("navigation, provider setup and conversation control never reach the engine", !ReadFixture(Path.Combine(reconnectHome, "commands.txt")).Split('\n').Intersect(forbidden).Any()
+            && Attempts() == 3 && states.Last() == "ready");
+        var busy = connection.SendAsync("refresh");
         bool timedOut = false;
         try { await busy; } catch (PacerCommandTimeoutException) { timedOut = true; }
         Check("slow command keeps a live snapshot stream connected", timedOut && Attempts() == 3 && states.Last() == "ready");
-        try { await connection.SendAsync("testDrop"); } catch (IOException) { }
+        try { await connection.SendAsync("prepareForSleep"); } catch (IOException) { }
         await Until(() => states.Last() == "reconnecting");
         connection.Dispose();
         int pausedAttempts = Attempts();
         await Task.Delay(PacerEngineConnection.RetryDelay(2) + TimeSpan.FromMilliseconds(300));
         Check("pause cancels a scheduled reconnect", Attempts() == pausedAttempts);
+        Check("disposing the activity engine leaves an unrelated process running", !sentinel.HasExited);
         Check("reconnect backoff is bounded", PacerEngineConnection.RetryDelay(0).TotalSeconds == 1 && PacerEngineConnection.RetryDelay(100).TotalSeconds == 30);
+    }
+    finally
+    {
+        sentinel.StandardInput.Close();
+        if (!sentinel.HasExited) await sentinel.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(12));
     }
 }
 finally

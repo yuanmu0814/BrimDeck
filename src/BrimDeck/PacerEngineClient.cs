@@ -73,6 +73,11 @@ internal sealed class PacerEngineClient : IDisposable
 
     internal async Task SendAsync(string method, object? parameters = null)
     {
+        // BrimDeck observes activity only. Keep Pacer's navigation, host
+        // activation and provider-setup commands outside this channel.
+        if (method is not ("initialize" or "configure" or "setExpanded" or "refresh" or "markRead" or "markAllRead"
+            or "prepareForSleep" or "resumeAfterSleep" or "shutdown"))
+            throw new PacerCommandException("unsupportedObserverCommand");
         Process process;
         lock (processGate)
         {

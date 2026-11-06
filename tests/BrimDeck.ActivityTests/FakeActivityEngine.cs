@@ -41,8 +41,9 @@ internal static class FakeActivityEngine
                 if (!parameters.GetProperty("hideProjects").GetBoolean() || parameters.GetProperty("retentionMinutes").GetInt32() != 120
                     || parameters.GetProperty("enabledProviders").GetArrayLength() != 3) return;
             }
-            if (method == "testDrop") return; // Fail an outstanding request.
-            if (method == "testBusy")
+            if (home is not null) await File.AppendAllTextAsync(Path.Combine(home, "commands.txt"), method + "\n");
+            if (method == "prepareForSleep") return; // Fail an outstanding request.
+            if (method == "refresh")
             {
                 // Healthy updates continue while one reply is deliberately late.
                 for (int count = 0; count < 32; count++) { await Snapshot(); await Task.Delay(500); }

@@ -52,7 +52,7 @@ public partial class MainWindow
         host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(30) });
         host.RowDefinitions.Add(new RowDefinition());
         var bar = new DockPanel { Margin = new Thickness(16, 0, 16, 5), LastChildFill = false };
-        var more = ActivityButton("···", Loc.T("任务监测选项", "Task monitoring options"), ShowActivityOptions);
+        var more = ActivityButton("···", Loc.T("实时任务设置", "Live task settings"), _app.OpenActivitySettings);
         DockPanel.SetDock(more, System.Windows.Controls.Dock.Right); bar.Children.Add(more);
         _aiSummary = UI.Fixed(AiActivity.Compact(_app.Activity, Loc.IsEnglish), 11, 22, UI.Secondary);
         _aiSummary.Margin = new Thickness(8, 0, 8, 0); _aiSummary.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -80,22 +80,6 @@ public partial class MainWindow
         var button = new Button { Content = text, FontFamily = UI.PanelFont, FontSize = 11,
             Style = (Style)Application.Current.FindResource("SegmentButton"), Padding = new Thickness(7, 1, 7, 1), ToolTip = name };
         AutomationProperties.SetName(button, name); button.Click += (_, _) => click(); return button;
-    }
-
-    private void ShowActivityOptions()
-    {
-        var menu = new ContextMenu();
-        void Toggle(string name, bool value, Action<DeckSettings, bool> set)
-        {
-            var item = new MenuItem { Header = name, IsCheckable = true, IsChecked = value };
-            item.Click += (_, _) => { var copy = Settings.Copy(); set(copy, item.IsChecked); _app.UpdateSettings(copy); _usageBuilt = null; RenderUsage(); };
-            menu.Items.Add(item);
-        }
-        Toggle(Loc.T("监测 AI 任务", "Monitor AI tasks"), Settings.AiActivityEnabled, (s, v) => s.AiActivityEnabled = v);
-        Toggle(Loc.T("隐藏项目和任务名称", "Hide project and task names"), Settings.AiHideTaskTitles, (s, v) => s.AiHideTaskTitles = v);
-        var retry = new MenuItem { Header = Loc.T("重新连接任务引擎", "Reconnect activity engine") };
-        retry.Click += (_, _) => _app.RetryActivity(); menu.Items.Add(retry);
-        menu.PlacementTarget = UsageContent; menu.IsOpen = true;
     }
 
     private void RenderActivityPage()
@@ -173,7 +157,7 @@ public partial class MainWindow
         var detail = UI.Fixed(details, 10.5, 18, UI.Secondary); detail.TextTrimming = TextTrimming.CharacterEllipsis; text.Children.Add(detail);
         var stateLine = new DockPanel { LastChildFill = true };
         var symbol = new AiStatusIcon(16) { Margin = new Thickness(0, 0, 5, 0) };
-        symbol.Update(row.Symbol, row.Phase == "running" ? new Dictionary<string, int> { [row.Provider] = 1 } : new Dictionary<string, int>(), UI.Brush(color), Settings.Animations && SystemParameters.ClientAreaAnimation);
+        symbol.Update(row.Symbol, row.Phase == "running" ? new Dictionary<string, int> { [row.Provider] = 1 } : new Dictionary<string, int>(), UI.Brush(color), Settings.AiStatusAnimations && SystemParameters.ClientAreaAnimation);
         stateLine.Children.Add(symbol);
         var state = UI.Fixed(row.Status, 11, 18, color); state.TextTrimming = TextTrimming.CharacterEllipsis; stateLine.Children.Add(state); text.Children.Add(stateLine);
         var stats = new StackPanel { MinWidth = 85, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12, 0, 0, 0) };
@@ -239,7 +223,7 @@ public partial class MainWindow
         string symbol = attention ? rows.FirstOrDefault(row => row.Attention is not null || row.Phase == "waitingForInput")?.Symbol ?? "hand.raised"
             : header?.CoreSymbol ?? rows.FirstOrDefault(row => row.Phase == "running")?.Symbol ?? "sparkle";
         var orbit = header?.Orbit ?? value.Tasks.Where(t => t.Phase == "running").GroupBy(t => t.Provider).ToDictionary(g => g.Key, g => g.Count());
-        icon.Update(symbol, orbit, UI.Brush(attention ? PanelTheme.AppWarning(new AppEntry()) : UI.Primary), Settings.Animations && SystemParameters.ClientAreaAnimation);
+        icon.Update(symbol, orbit, UI.Brush(attention ? PanelTheme.AppWarning(new AppEntry()) : UI.Primary), Settings.AiStatusAnimations && SystemParameters.ClientAreaAnimation);
         icon.ToolTip = ActivityHelp;
         AutomationProperties.SetName(icon, Loc.T("AI 任务状态：", "AI task status: ") + symbol);
     }
