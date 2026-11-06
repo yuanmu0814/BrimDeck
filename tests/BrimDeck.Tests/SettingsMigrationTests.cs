@@ -5,6 +5,10 @@ internal static class SettingsMigrationTests
     public static void Run(string root, Action<string, bool> check)
     {
         var v010 = new Version(0, 1, 0);
+        var usbStore = new SettingsStore(Path.Combine(root, "usb-service"), "1.2.5");
+        check("USB service: an upgraded settings file allows an already installed service", SettingsMigrations.Read("{}", new Version(1, 2, 5), out _).UsbTemperatureServiceEnabled);
+        var usbSettings = usbStore.Load(); usbSettings.UsbTemperatureServiceEnabled = false; usbStore.Save(usbSettings);
+        check("USB service: pausing persists across settings reloads", !usbStore.Load().UsbTemperatureServiceEnabled);
         check("application versions compare by major, minor and patch", ApplicationVersion.Parse("0.2.0+abc") == new Version(0, 2, 0)
             && ApplicationVersion.Parse("0.2.0-beta") == new Version(0, 2, 0) && ApplicationVersion.Parse("") == new Version(0, 0, 0)
             && ApplicationVersion.Parse("0.10.0") > ApplicationVersion.Parse("0.9.0"));

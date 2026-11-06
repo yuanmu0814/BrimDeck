@@ -87,6 +87,7 @@ public partial class App : Application
         RecordCrashes();
         var folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BrimDeck");
         Store = new SettingsStore(folder); Settings = Store.Load();
+        UsbTemperatureAccess.Enabled = Settings.UsbTemperatureServiceEnabled;
         // Before anything is read: a reading left unanswered when the last run ended stops now (SensorGuard).
         SensorGuard.Start(folder);
         UseLanguage();
@@ -133,7 +134,7 @@ public partial class App : Application
 
     private async Task AllowUsbTemperaturesAsync()
     {
-        try { await UsbTemperatureAccess.EnableAsync(); OpenSettings(); _settingsWindow?.ShowPage(SettingsWindow.MonitorSettingsPage); }
+        try { await UsbTemperatureAccess.EnableAsync(); Settings.UsbTemperatureServiceEnabled = true; FlushSettings(); OpenSettings(); _settingsWindow?.ShowPage(SettingsWindow.MonitorSettingsPage); }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException or OperationCanceledException or TimeoutException)
         { OpenSettings(); _settingsWindow?.ShowPage(SettingsWindow.MonitorSettingsPage); }
     }
@@ -226,6 +227,7 @@ public partial class App : Application
         // A new collapsed style morphs every panel's surface into its form (MainWindow.MorphShape).
         bool styleChanged = settings.Style != Settings.Style;
         settings.Normalize(); Settings = settings;
+        UsbTemperatureAccess.Enabled = settings.UsbTemperatureServiceEnabled;
         ApplyHotkeys();
         ApplyTray();
         // A panel whose collapsed row changes asks again as it is built (PresentMonitor).

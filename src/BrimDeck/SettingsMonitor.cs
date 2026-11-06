@@ -100,30 +100,46 @@ public sealed partial class SettingsWindow
         status.TextWrapping = TextWrapping.Wrap;
         bool busy = false;
         var button = ActionButton("", () => { });
+        var remove = ActionButton(Loc.T("卸载", "Uninstall"), () => { });
+        remove.Margin = new Thickness(8, 0, 0, 0);
         void Fill()
         {
             bool active = Native.UsbTemperatureAccess.Active;
             var temperatures = string.Join(" · ", Native.UsbTemperatureAccess.Latest.Where(drive => drive.Temperature is not null)
                 .Select(drive => drive.Letters + " " + Temperatures.Detail(drive.Temperature!.Celsius)));
-            button.Content = active ? Loc.T("停用", "Turn off") : Loc.T("授权读取", "Allow reading");
+            bool installed = Native.UsbTemperatureSetup.Installed;
+            button.Content = active ? Loc.T("停用", "Turn off") : installed ? Loc.T("启用", "Turn on") : Loc.T("一次授权", "Allow once");
             button.IsEnabled = !busy;
+            remove.IsEnabled = !busy; remove.Visibility = installed ? Visibility.Visible : Visibility.Collapsed;
             status.Text = busy ? Loc.T("等待 Windows 管理员确认…", "Waiting for Windows administrator confirmation…")
-                : active ? temperatures.Length > 0 ? temperatures : Loc.T("采集助手已启用，转接盒未返回温度。", "The helper is on; the bridge did not report a temperature.")
-                : Loc.T("转接盒需要 SMART 权限时，授权仅限本次运行的温度采集助手。", "For bridges that need SMART access, allow a temperature helper for this run.");
+                : active ? Loc.T("已长期授权，重启后自动读取。", "Allowed across restarts; readings resume automatically.") + (temperatures.Length > 0 ? " " + temperatures : "")
+                : installed ? Loc.T("已停用读取，启用时无需重新授权。", "Reading is paused; enabling it needs no new permission.")
+                : Loc.T("一次管理员确认后安装只读温度服务，重启 Windows 或 BrimDeck 后自动读取。", "Install the read-only temperature service with one administrator confirmation; readings resume after Windows or BrimDeck restarts.");
         }
         button.Click += async (_, _) =>
         {
             if (busy) return;
-            if (Native.UsbTemperatureAccess.Active) { Native.UsbTemperatureAccess.Stop(); Fill(); return; }
+            if (Native.UsbTemperatureAccess.Active) { Change(s => s.UsbTemperatureServiceEnabled = false); Fill(); return; }
             busy = true; Fill();
-            try { await Native.UsbTemperatureAccess.EnableAsync(); }
+            try { await Native.UsbTemperatureAccess.EnableAsync(); Change(s => s.UsbTemperatureServiceEnabled = true); }
             catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or System.IO.IOException or UnauthorizedAccessException or OperationCanceledException or TimeoutException)
-            { status.Text = Loc.T("无法启用：", "Could not enable: ") + ex.Message; busy = false; button.IsEnabled = true; return; }
+            { busy = false; Fill(); status.Text = Loc.T("无法启用：", "Could not enable: ") + ex.Message; return; }
             busy = false; Fill();
         };
-        AutomationProperties.SetName(button, Loc.T("授权读取 USB 硬盘温度", "Allow reading USB disk temperatures"));
+        remove.Click += async (_, _) =>
+        {
+            if (busy) return;
+            busy = true; Fill();
+            try { await Native.UsbTemperatureSetup.UninstallAsync(); Change(s => s.UsbTemperatureServiceEnabled = false); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or System.IO.IOException or UnauthorizedAccessException or OperationCanceledException or TimeoutException)
+            { busy = false; Fill(); status.Text = Loc.T("无法卸载：", "Could not uninstall: ") + ex.Message; return; }
+            busy = false; Fill();
+        };
+        AutomationProperties.SetName(button, Loc.T("启用或停用 USB 硬盘温度", "Enable or pause USB disk temperatures"));
+        AutomationProperties.SetName(remove, Loc.T("卸载 USB 温度服务", "Uninstall the USB temperature service"));
         Fill();
-        return Row(Loc.T("USB 硬盘温度", "USB disk temperatures"), button, status);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal }; actions.Children.Add(button); actions.Children.Add(remove);
+        return Row(Loc.T("USB 硬盘温度", "USB disk temperatures"), actions, status);
     }
 
     // Under the last row of "展开时": a line in amber for every reading stopped because its driver did not answer (SensorGuard),

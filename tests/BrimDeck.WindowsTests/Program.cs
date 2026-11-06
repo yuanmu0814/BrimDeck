@@ -14,7 +14,6 @@ internal static class Program
     {
         try
         {
-            if (args is [UsbTemperatureAccess.ElevatedSwitch, var pipe, var parent]) return UsbTemperatureAccess.RunHelperAsync(pipe, parent).GetAwaiter().GetResult();
             // "--only power": just the power and battery checks, for a quick look at what this machine reports.
             if (args is ["--only", "power"]) { PowerChecks.Run(Check); return Finish(); }
             if (args is ["--only", "fans"]) { FanChecks.Run(Check); return Finish(); }
@@ -57,6 +56,7 @@ internal static class Program
                 PowerChecks.Run(Check);
             }
             SensorGuardChecks.Run(Check);
+            StorageChecks.Helper(Check);
 
             return Finish();
         }

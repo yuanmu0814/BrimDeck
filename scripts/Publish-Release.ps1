@@ -25,7 +25,8 @@ try {
     $sensors = Copy-Item -LiteralPath (Join-Path $sensorsPath 'BrimDeck.Sensors.exe') -Destination $outputPath -PassThru
     $sensorsSha256 = (Get-FileHash -LiteralPath $sensors.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     & (Join-Path $PSScriptRoot 'Build-PacerEngine.ps1')
-    dotnet publish src/BrimDeck/BrimDeck.csproj -c Release -r win-x64 --self-contained true -p:Version=$Version -p:PublishSingleFile=false -p:SensorsSha256=$sensorsSha256 -o $publishPath
+    $usbSensors = & (Join-Path $PSScriptRoot 'Build-UsbSensors.ps1') -Version $Version
+    dotnet publish src/BrimDeck/BrimDeck.csproj -c Release -r win-x64 --self-contained true -p:Version=$Version -p:PublishSingleFile=false -p:SensorsSha256=$sensorsSha256 "-p:UsbSensorsSha256=$($usbSensors.Sha256)" -o $publishPath
     if ($LASTEXITCODE -ne 0) { throw 'Application publish failed.' }
     $iscc = & (Join-Path $PSScriptRoot 'Get-InnoSetup.ps1')
     & $iscc -qp "-dAppVersion=$Version" "-dSourceDir=$publishPath" "-o$outputPath" installer/BrimDeck.iss

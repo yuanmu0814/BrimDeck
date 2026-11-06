@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Buffers.Binary;
+using System.Text;
 using BrimDeck.Core;
 
 namespace BrimDeck.Native;
@@ -11,9 +13,9 @@ namespace BrimDeck.Native;
 // SAT: https://www.t10.org/ftp/t10/document.04/04-262r8.pdf
 internal static class UsbDiskTemperature
 {
-    public static DiskTemperature? Read(int number, string model)
+    public static DiskTemperature? Read(int number, string? model = null)
     {
-        if (StorageReader.Describe(number) is not { Bus: Storage.BusUsb } disk || disk.Model != model) return null;
+        if (Describe(number) is not { Bus: Storage.BusUsb } disk || model is not null && disk.Model != model) return null;
         var device = CreateFileW($@"\\.\PhysicalDrive{number}", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
         if (device == new IntPtr(-1)) return null;
         try
@@ -25,10 +27,33 @@ internal static class UsbDiskTemperature
                 [0xA1, 0x08, 0x0E, 0xD0, 1, 0, 0x4F, 0xC2, 0, 0xB0, 0, 0]
             ];
             foreach (var command in commands)
-                if (ReadData(device, command) is { } data && Core.Temperatures.SmartDisk(model, data) is { } heat) return heat;
+                if (ReadData(device, command) is { } data && Core.Temperatures.SmartDisk(disk.Model, data) is { } heat) return heat;
             return null;
         }
         finally { CloseHandle(device); }
+    }
+
+    private static StorageDisk? Describe(int number)
+    {
+        if (number is < 0 or >= 64) return null;
+        var device = CreateFileW($@"\\.\PhysicalDrive{number}", 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (device == new IntPtr(-1)) return null;
+        var query = Marshal.AllocHGlobal(12); var output = Marshal.AllocHGlobal(1024);
+        try
+        {
+            Marshal.Copy(new byte[12], 0, query, 12);
+            if (!DeviceIoControl(device, 0x2D1400, query, 12, output, 1024, out int length, IntPtr.Zero) || length is < 32 or > 1024) return null;
+            var data = new byte[length]; Marshal.Copy(output, data, 0, length);
+            int productAt = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(16));
+            string model = "";
+            if (productAt > 0 && productAt < length)
+            {
+                int end = Array.IndexOf(data, (byte)0, productAt);
+                model = Encoding.ASCII.GetString(data, productAt, (end < 0 ? length : end) - productAt).Trim();
+            }
+            return new(model, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(28)), data[10] != 0);
+        }
+        finally { Marshal.FreeHGlobal(query); Marshal.FreeHGlobal(output); CloseHandle(device); }
     }
 
     private static byte[]? ReadData(IntPtr device, byte[] command)

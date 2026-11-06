@@ -13,6 +13,7 @@
     <Content Include="ThirdPartyNotices.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\.artifacts\pacer-engine\**\*" Link="Engine\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\.artifacts\usb-sensors\BrimDeck.UsbSensors.exe" Condition="Exists('..\..\.artifacts\usb-sensors\BrimDeck.UsbSensors.exe')" Link="BrimDeck.UsbSensors.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -44,6 +45,9 @@
        enhanced sensors on must match it (Native.SensorSetup). A build without it uses BrimDeck.Sensors.exe beside BrimDeck.exe. -->
   <ItemGroup Condition="'$(SensorsSha256)' != ''">
     <AssemblyMetadata Include="SensorsSha256" Value="$(SensorsSha256)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(UsbSensorsSha256)' != ''">
+    <AssemblyMetadata Include="UsbSensorsSha256" Value="$(UsbSensorsSha256)" />
   </ItemGroup>
 
   <!-- Published builds ship precompiled code and run it as compiled. With tiered compilation the runtime
