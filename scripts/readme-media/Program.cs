@@ -150,6 +150,7 @@ internal sealed class Renderer(App app, string output, string language, string[]
         if (scenes.Contains("screen-edges")) await ScreenEdges();
         if (scenes.Contains("ai-activity")) await AiActivityScenes();
         if (scenes.Contains("fans")) await FanScenes();
+        if (scenes.Contains("fan-page")) await FanPageScenes();
         if (scenes.Contains("ai-width")) await AiWidthScenes();
         Directory.Delete(folder, true);
     }
@@ -855,6 +856,54 @@ internal sealed class Renderer(App app, string output, string language, string[]
         fan.ShowValue = true;
         await SettingsPage("fans-settings", 9);
         Console.WriteLine("Fan dial, RPM and ratio widths passed in both themes at 100% and 150%.");
+    }
+
+    private async Task FanPageScenes()
+    {
+        Program.SetProperty(app, "Exiting", true);
+        _settings.Animations = false; _settings.MonitorFans = true; _settings.CapsuleMonitor = false;
+        const ulong gb = 1UL << 30;
+        StorageDrive[] drives = [new(0, "Demo SSD", [new("C:", "System", 476 * gb, 104 * gb)]) { Temperature = new("Demo SSD", 43) },
+            new(1, "Demo SSD", [new("E:", "Data", 1740 * gb, 205 * gb)]) { Temperature = new("Demo SSD", 42) }];
+        var sample = MonitorSample() with { Fans = new FanSample(4760, 4607), Power = new PowerSample(53, PowerOrigin.Estimated, PowerSource.Components, []), Storage = drives };
+        // Seed a paused sampler with invented hardware states. Exiting prevents its worker from starting.
+        var samplerType = Type.GetType("BrimDeck.Native.SystemSampler, BrimDeck")!;
+        using var sampler = (IDisposable)Activator.CreateInstance(samplerType, Program.Any, null,
+            [Dispatcher.CurrentDispatcher, (Func<(string?, string?)>)(() => (null, null))], null)!;
+        var storage = Program.Field(sampler, "_storage")!;
+        Program.SetField(storage, "_count", 2); Program.SetField(storage, "_drives", SensorState.Found); Program.SetField(storage, "_temperatures", SensorState.Found);
+        var fanProvider = Activator.CreateInstance(Type.GetType("BrimDeck.Native.ClevoFans, BrimDeck")!, Program.Any, null, [null], null)!;
+        Program.SetProperty(fanProvider, "State", SensorState.Found); Program.SetField(sampler, "_fans", fanProvider);
+        Program.SetProperty(sampler, "Latest", sample); Program.SetProperty(app, "Monitor", sampler);
+        SelectPage(DeckPage.Monitor); _deck.SetExpanded(true, true);
+        var theme = Type.GetType("BrimDeck.PanelTheme, BrimDeck")!;
+        foreach (string palette in new[] { PanelThemes.Light, PanelThemes.Dark })
+        {
+            _settings.PanelTheme = palette; theme.GetMethod("Use", Program.Any)!.Invoke(null, [_settings, false, false]);
+            foreach (var (width, height) in new[] { (871, 320), (760, 240), (400, 280) })
+            {
+                _settings.MonitorWidth = width; _settings.MonitorHeight = height; Refresh(); await Settle();
+                var view = (FrameworkElement)Program.Field(_deck, "_monitorView")!;
+                Program.Call(view, "Update", [typeof(MonitorSnapshot), typeof(bool)], sample, false); await Settle();
+                var fans = Program.Field(view, "_fans") as FrameworkElement ?? throw new InvalidOperationException($"Missing fan row at {width}×{height}.");
+                var readings = (FrameworkElement)Program.Field(view, "_readings")!;
+                var position = fans.TranslatePoint(new Point(), readings);
+                if (position.Y < 0 || position.Y + fans.ActualHeight > readings.ActualHeight + 1) throw new InvalidOperationException("Fan row extends beyond the monitor page.");
+                if (fans.ToolTip is not string help || !help.Contains("CPU 4760 RPM") || !help.Contains("GPU 4607 RPM")) throw new InvalidOperationException("Fan details missing one of the physical fans.");
+                Program.Call(app, "UpdateMonitorExtras", []);
+                if (Program.Field(sampler, "_fansWanted") is not true) throw new InvalidOperationException("Expanded page did not request fan sampling independently of the capsule.");
+                await SaveAiIsland($"fan-page-{palette}-{width}x{height}");
+                Program.Call(view, "Update", [typeof(MonitorSnapshot), typeof(bool)], sample with { Fans = Reading<FanSample>.Unavailable("temporary") }, false);
+                if (fans.ToolTip is not string unavailable || unavailable.Contains("0 RPM")) throw new InvalidOperationException("Missing telemetry became zero RPM.");
+            }
+        }
+        Program.SetProperty(fanProvider, "State", SensorState.None); Refresh(); await Settle();
+        if (Program.Field(Program.Field(_deck, "_monitorView")!, "_fans") is not null) throw new InvalidOperationException("Unsupported fan hardware kept an empty row.");
+        Program.SetProperty(fanProvider, "State", SensorState.Found);
+        _settings.MonitorFans = false; Refresh(); await Settle();
+        if (Program.Field(Program.Field(_deck, "_monitorView")!, "_fans") is not null) throw new InvalidOperationException("Fan visibility switch did not hide the page row.");
+        Program.SetProperty(app, "Monitor", null);
+        Console.WriteLine("Expanded fan rows fit all page sizes; both fan readings, missing telemetry and the visibility switch passed.");
     }
 
     private static MonitorSnapshot MonitorSample(int tick = 0)

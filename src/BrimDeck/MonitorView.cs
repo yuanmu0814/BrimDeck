@@ -57,6 +57,7 @@ internal sealed class MonitorView : Grid
     private readonly StorageBlock? _storage;
     private readonly PowerBlock? _power;
     private readonly FramesBlock? _frames;
+    private readonly FansBlock? _fans;
     private readonly bool _temperatures;
     private readonly Grid _readings = new();
     // How far the readings stop above the page's foot, so their last line ends level with the list's last row (AlignFoot).
@@ -75,7 +76,7 @@ internal sealed class MonitorView : Grid
     // frames: the line under memory and network shows the frame rate of the program in front, when the layout has room for it (FrameLine).
     public MonitorView(MonitorLayout layout, MonitorColors colors, MonitorMain main, ProcessSort sort, MonitorProcessView processView,
         Action<MonitorMain> mainChanged, Action<ProcessSort> sortChanged, Action<bool> hold, Action<GpuSample> gpuChanged, bool temperatures = false, bool smallTemperature = false,
-        PowerOptions? power = null, bool frames = false)
+        PowerOptions? power = null, bool frames = false, bool fans = false)
     {
         _layout = layout; _colors = colors; _main = main; _temperatures = temperatures;
         bool cpuMain = main == MonitorMain.Cpu;
@@ -164,6 +165,12 @@ internal sealed class MonitorView : Grid
             { Margin = new Thickness(0, layout.Metrics switch { MetricsMode.Line => 2, MetricsMode.Lines => 4, _ => 8 }, 0, 0) };
             SetRow(_power, 6); readings.Children.Add(_power);
         }
+        if (layout.FanLine && fans)
+        {
+            readings.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _fans = new FansBlock(colors, layout.Body, layout.Caption, layout.StorageRow) { Height = layout.StorageRow, Margin = new Thickness(0, lineGap, 0, 0) };
+            SetRow(_fans, 7); readings.Children.Add(_fans);
+        }
 
         if (layout.List == ListPlacement.None) Children.Add(readings);
         else
@@ -204,6 +211,7 @@ internal sealed class MonitorView : Grid
     public bool ShowsPower => _power is not null;
     // Whether the page has the frame rate's line (the layout had room for it): the frame rate is read for it only then.
     public bool ShowsFrames => _frames is not null;
+    public bool ShowsFans => _fans is not null;
     // Another monitor on the frame rate's line, without building the page again.
     // The widest a graphics engine's column grows on the page with the GPU large: no narrower than the graph's room needs, so the
     // few kinds of engine an adapter has always fill it.
@@ -304,6 +312,7 @@ internal sealed class MonitorView : Grid
         _storage?.Set(snapshot.Storage, motion);
         _power?.Set(snapshot, motion);
         _frames?.Set(snapshot);
+        _fans?.Set(snapshot.Fans);
         _list?.Set(snapshot.Processes, _cores, motion);
         _processes = snapshot.Processes.OrDefault;
         // An open card follows its app's readings; it closes when the app has left the list.

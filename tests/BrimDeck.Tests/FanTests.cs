@@ -39,5 +39,31 @@ static class FanTests
         check("Fans: Brief remains the original three rings", CompactMonitor.Shown(readings) == CompactMonitor.Rings && !readings.First(r => r.Item == F).Visible);
         CompactMonitor.Apply(readings, CompactMonitorMode.Full);
         check("Fans: Full includes the fan dial and its figure", (CompactMonitor.Shown(readings) & F) != 0 && (CompactMonitor.Values(readings) & F) != 0);
+        Layout(check);
+    }
+
+    private static void Layout(Action<string, bool> check)
+    {
+        var normal = MonitorLayout.For(871, 250, true, 2, 1, fans: true);
+        var parts = normal.Parts(250);
+        check("Fans page: both fan readings have a line below power", normal.FanLine && parts[6].Top == parts[4].Top + parts[4].Height && parts[6].Height > 0);
+        var disabled = MonitorLayout.For(871, 250, true, 2, 1);
+        check("Fans page: disabled or unsupported fans reserve no row", !disabled.FanLine && disabled.Parts(250)[6].Height == 0 && disabled == MonitorLayout.For(871, 250, true, 2, 1, fans: false));
+        check("Fans page: very short pages retain a usable graph", !MonitorLayout.For(400, 90, false, 2, 1, fans: true).FanLine);
+        bool fits = true;
+        foreach (double width in new[] { 360d, 700, 960 })
+        for (double height = 100; height <= 420; height += 5)
+        {
+            var layout = MonitorLayout.For(width, height, true, 6, 1, frames: true, fans: true);
+            double readings = layout.List == ListPlacement.Below ? MonitorLayout.StackedReadings : height;
+            var blocks = layout.Parts(readings);
+            if (layout.FanLine && (blocks[1].Height < MonitorLayout.MinimumGraph || blocks[6].Top + blocks[6].Height > readings + 1e-9)) fits = false;
+        }
+        check("Fans page: fans, frames, drives and power fit without cutting the graph", fits);
+        var settings = new DeckSettings(); settings.Normalize();
+        check("Fans page: enabled by default independently of the capsule", settings.MonitorFans && !settings.CompactReadings.First(r => r.Item == CompactMonitorItems.Fans).Visible);
+        settings.MonitorFans = false;
+        var restored = JsonSerializer.Deserialize<DeckSettings>(JsonSerializer.Serialize(settings))!; restored.Normalize();
+        check("Fans page: its separate visibility switch is saved", !restored.MonitorFans);
     }
 }

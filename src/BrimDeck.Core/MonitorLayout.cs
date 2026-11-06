@@ -206,6 +206,8 @@ public sealed record MonitorLayout(double Figure, double Body, double Caption, M
     // which give up room for it, and after the first power line; a page without room for it has none, and a page that asks for no
     // frame rates is laid out exactly as before.
     public bool FrameLine { get; init; }
+    // CPU and GPU fan ratios share one line below power; RPMs follow where the width allows.
+    public bool FanLine { get; init; }
     public static int PowerRoom(double readings, MetricsMode metrics, double figure, double body, int storageLines)
     {
         var (head, margins, rest, storageMargin) = Fixed(metrics, figure, body);
@@ -237,10 +239,11 @@ public sealed record MonitorLayout(double Figure, double Body, double Caption, M
         double frames = FrameLine ? storageMargin + StorageRow : 0;
         double storage = StorageLines > 0 ? storageMargin + StorageLines * StorageRow : 0;
         double power = PowerLines > 0 ? storageMargin + PowerLines * StorageRow : 0;
-        double graph = Math.Max(16, readings - foot - head - margins - metrics - frames - storage - power);
+        double fans = FanLine ? storageMargin + StorageRow : 0;
+        double graph = Math.Max(16, readings - foot - head - margins - metrics - frames - storage - power - fans);
         double graphTop = head + (Metrics == MetricsMode.Line ? 4 : 6);
         double metricsTop = head + margins + graph, framesTop = metricsTop + metrics;
-        return [(0, head), (graphTop, graph), (metricsTop, metrics), (framesTop + frames, storage), (framesTop + frames + storage, power), (framesTop, frames)];
+        return [(0, head), (graphTop, graph), (metricsTop, metrics), (framesTop + frames, storage), (framesTop + frames + storage, power), (framesTop, frames), (framesTop + frames + storage + power, fans)];
     }
 
     // How far past a step a resize must go before the page takes the next step, so a size held at a step does not flip back and
@@ -248,19 +251,19 @@ public sealed record MonitorLayout(double Figure, double Body, double Caption, M
     public const double Hysteresis = 12;
 
     // The layout for this size, keeping previous (the step the page shows) while the size is within Hysteresis of it.
-    public static MonitorLayout For(double width, double height, bool processes, int storage, MonitorLayout? previous, int power = 0, bool frames = false)
+    public static MonitorLayout For(double width, double height, bool processes, int storage, MonitorLayout? previous, int power = 0, bool frames = false, bool fans = false)
     {
-        var next = For(width, height, processes, storage, power, frames);
+        var next = For(width, height, processes, storage, power, frames, fans);
         if (previous is null || next == previous) return next;
         foreach (double dw in new[] { 0, -Hysteresis, Hysteresis })
             foreach (double dh in new[] { 0, -Hysteresis, Hysteresis })
-                if (For(width + dw, height + dh, processes, storage, power, frames) == previous) return previous;
+                if (For(width + dw, height + dh, processes, storage, power, frames, fans) == previous) return previous;
         return next;
     }
 
     // storage: the volumes the page would show an entry each. power: the lines the page would show for power (0 to 2). frames:
     // whether the page shows the frame rate's line.
-    public static MonitorLayout For(double width, double height, bool processes, int storage = 0, int power = 0, bool frames = false)
+    public static MonitorLayout For(double width, double height, bool processes, int storage = 0, int power = 0, bool frames = false, bool fans = false)
     {
         width = double.IsFinite(width) ? Math.Max(0, width) : 0;
         height = double.IsFinite(height) ? Math.Max(0, height) : 0;
@@ -282,13 +285,15 @@ public sealed record MonitorLayout(double Figure, double Body, double Caption, M
         bool firstLine = power > 0 && PowerRoom(readings, metrics, figure, body, 0) >= 1;
         double line = Fixed(metrics, figure, body).StorageMargin + StorageRowFor(body);
         double reserve = firstLine ? line : 0;
+        bool fanLine = fans && PowerRoom(readings - reserve, metrics, figure, body, 0) >= 1;
+        double fanRoom = fanLine ? line : 0;
         // The frame rate's line comes next, where a line still fits with the first power line's room kept.
-        bool frameLine = frames && PowerRoom(readings - reserve, metrics, figure, body, 0) >= 1;
+        bool frameLine = frames && PowerRoom(readings - reserve - fanRoom, metrics, figure, body, 0) >= 1;
         double frameRoom = frameLine ? line : 0;
         int columns = storage <= 0 ? 0 : readingsWidth >= StorageTwoColumns ? Math.Min(storage, MaximumStorageColumns) : 1;
-        int lines = storage <= 0 ? 0 : Math.Min((storage + columns - 1) / columns, StorageRoom(readings - reserve - frameRoom, metrics, figure, body));
-        int powerLines = power <= 0 ? 0 : Math.Min(Math.Min(power, 2), Math.Max(PowerRoom(readings - frameRoom, metrics, figure, body, lines), firstLine ? 1 : 0));
-        return new(figure, body, caption, metrics, list, row) { StorageLines = lines, StorageColumns = lines > 0 ? columns : 0, PowerLines = powerLines, FrameLine = frameLine };
+        int lines = storage <= 0 ? 0 : Math.Min((storage + columns - 1) / columns, StorageRoom(readings - reserve - frameRoom - fanRoom, metrics, figure, body));
+        int powerLines = power <= 0 ? 0 : Math.Min(Math.Min(power, 2), Math.Max(PowerRoom(readings - frameRoom - fanRoom, metrics, figure, body, lines), firstLine ? 1 : 0));
+        return new(figure, body, caption, metrics, list, row) { StorageLines = lines, StorageColumns = lines > 0 ? columns : 0, PowerLines = powerLines, FrameLine = frameLine, FanLine = fanLine };
     }
 
     // The rows and columns a list of this size shows.
