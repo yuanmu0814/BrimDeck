@@ -139,6 +139,11 @@ internal sealed class Renderer(App app, string output, string language, string[]
         // The "配额与统计" page: one row per application with its sources, name and colours.
         // Not used by the README at present; rendered only when asked for by name.
         if (scenes.Contains("settings")) await SettingsPage("settings", 3);
+        if (scenes.Contains("upstream-settings"))
+        {
+            await SettingsPage("settings-general", 0);
+            await SettingsPage("settings-shortcuts", 11);
+        }
         // The music page at its presets and at the ends of its size range; for checking layout changes, not for the README.
         if (scenes.Contains("music-sizes")) await MusicSizes();
         // Exercises the real panel's placement with synthetic data; no account or media session is read.
