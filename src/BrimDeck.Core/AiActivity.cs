@@ -67,12 +67,23 @@ public static class AiActivity
     public static string Name(string provider) => provider switch { "codex" => "Codex", "claude" => "Claude", "deepseek" => "DeepSeek", _ => provider };
     public static int Unread(AiActivitySnapshot value) => value.Presentation?.Rows.Count(row => row.Unread) ?? 0;
     public static int Failed(AiActivitySnapshot value) => value.Presentation?.Rows.Count(row => row.Unread && row.Failed) ?? 0;
+    // Keep the compact label and glyph on the same engine-selected task when several tasks run at once.
+    public static string RunningSymbol(AiActivitySnapshot value) => value.Presentation?.Header?.CoreSymbol
+        ?? value.Presentation?.Rows?.FirstOrDefault(row => row.Phase == "running")?.Symbol ?? "sparkle";
+
+    private static string RunningLabel(AiActivitySnapshot value, bool english) => RunningSymbol(value) switch
+    {
+        "terminal" => english ? "Calling tools" : "调用工具",
+        "text.bubble" => english ? "Responding" : "输出回复",
+        _ => english ? "Thinking" : "正在思考"
+    };
+
     public static string Compact(AiActivitySnapshot value, bool english = false)
     {
         if (value.WaitingCount > 0 || value.Requests.Count > 0) return english ? $"! {Math.Max(value.WaitingCount, value.Requests.Count)}" : $"待确认 {Math.Max(value.WaitingCount, value.Requests.Count)}";
         if (Failed(value) is > 0 and var failed) return english ? $"× {failed} failed" : $"× {failed} 失败";
         if (value.RunningCount > 0) return value.RateIsFresh && value.TotalTokensPerSecond is > 0 and < 1_000_000
-            ? $"{value.RunningCount} · {value.TotalTokensPerSecond.Value.ToString("0", CultureInfo.InvariantCulture)} t/s" : english ? $"{value.RunningCount} · Thinking" : $"{value.RunningCount} · 思考中";
+            ? $"{value.RunningCount} · {value.TotalTokensPerSecond.Value.ToString("0", CultureInfo.InvariantCulture)} t/s" : $"{value.RunningCount} · {RunningLabel(value, english)}";
         int unread = Unread(value);
         if (unread > 0 && value.Presentation?.Rows.Any(row => row.Unread && row.Phase == "interrupted") == true)
             return english ? $"Ⅱ {unread} ended" : $"Ⅱ {unread} 已结束";

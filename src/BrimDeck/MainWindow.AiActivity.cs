@@ -221,7 +221,7 @@ public partial class MainWindow
         // Multiple tasks keep their count in the adjacent text; show the most
         // recent active stage here instead of replacing the glyph with a count.
         string symbol = attention ? rows.FirstOrDefault(row => row.Attention is not null || row.Phase == "waitingForInput")?.Symbol ?? "hand.raised"
-            : header?.CoreSymbol ?? rows.FirstOrDefault(row => row.Phase == "running")?.Symbol ?? "sparkle";
+            : AiActivity.RunningSymbol(value);
         var orbit = header?.Orbit ?? value.Tasks.Where(t => t.Phase == "running").GroupBy(t => t.Provider).ToDictionary(g => g.Key, g => g.Count());
         icon.Update(symbol, orbit, UI.Brush(attention ? PanelTheme.AppWarning(new AppEntry()) : UI.Primary), Settings.AiStatusAnimations && SystemParameters.ClientAreaAnimation);
         icon.ToolTip = ActivityHelp;

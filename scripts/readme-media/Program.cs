@@ -204,9 +204,9 @@ internal sealed class Renderer(App app, string output, string language, string[]
     private async Task AiActivityScenes()
     {
         var activity = AiActivitySnapshot.Parse(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "ai-activity-fixture.json")));
-        AiActivitySnapshot Stage(string symbol) => activity with
+        AiActivitySnapshot Stage(string symbol, bool fresh = true) => activity with
         {
-            RunningCount = 1, WaitingCount = 0, Requests = [], RateIsFresh = true, TotalTokensPerSecond = 42,
+            RunningCount = 1, WaitingCount = 0, Requests = [], RateIsFresh = fresh, TotalTokensPerSecond = fresh ? 42 : null,
             Presentation = activity.Presentation! with
             {
                 Rows = [activity.Presentation!.Rows.First(row => row.Phase == "running") with { Symbol = symbol, Unread = false, Failed = false, Attention = null }],
@@ -259,11 +259,14 @@ internal sealed class Renderer(App app, string output, string language, string[]
                     ("running", Stage("sparkle")),
                     ("tool", Stage("terminal")),
                     ("reply", Stage("text.bubble")),
+                    ("thinking-no-rate", Stage("sparkle", false)),
+                    ("tool-no-rate", Stage("terminal", false)),
+                    ("reply-no-rate", Stage("text.bubble", false)),
                     ("waiting", activity with { RunningCount = 2, WaitingCount = 1 }),
                     ("idle", AiActivitySnapshot.Empty)
                 })
                 {
-                    Program.SetProperty(app, "Activity", value); Refresh(); await Save($"ai-capsule-{name}-{palette}-{scale}", 1);
+                    Program.SetProperty(app, "Activity", value); Program.Call(_deck, "ActivityChanged", []); await Save($"ai-capsule-{name}-{palette}-{scale}", 1);
                     if (palette == PanelThemes.Light && scale == 100 && name == "running") await SaveAiIsland("ai-capsule-preview");
                     var panel = (System.Windows.Controls.StackPanel)_deck.FindName("CompactRings")!;
                     var row = panel.Children.OfType<System.Windows.Controls.Grid>().First();
@@ -277,6 +280,19 @@ internal sealed class Renderer(App app, string output, string language, string[]
                     if (Program.Field(_deck, "_activityBadge") is System.Windows.Controls.Border textBadge
                         && (textBadge.Background is not null || textBadge.Padding.Right != 0 || textBadge.Width - textBadge.Child.DesiredSize.Width > 1))
                         throw new InvalidOperationException("Compact activity regained its fill or reserved trailing space.");
+                    if (name.EndsWith("-no-rate", StringComparison.Ordinal))
+                    {
+                        string expected = name switch
+                        {
+                            "tool-no-rate" => _english ? "Calling tools" : "调用工具",
+                            "reply-no-rate" => _english ? "Responding" : "输出回复",
+                            _ => _english ? "Thinking" : "正在思考"
+                        };
+                        if (Program.Field(_deck, "_activityBadge") is not System.Windows.Controls.Border { Child: System.Windows.Controls.TextBlock label }
+                            || label.Text != "1 · " + expected || icon is null
+                            || (string)icon.GetType().GetProperty("Symbol", Program.Any)!.GetValue(icon)! != value.Presentation!.Header.CoreSymbol)
+                            throw new InvalidOperationException("A no-rate stage transition did not update both the label and icon.");
+                    }
                 }
                 Program.SetProperty(app, "Activity", activity);
             }
