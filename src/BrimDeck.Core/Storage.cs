@@ -6,6 +6,7 @@ namespace BrimDeck.Core;
 // them for the current user.
 public sealed record StorageVolume(string Letter, string Label, ulong Total, ulong Free)
 {
+    public bool Removable { get; init; }
     public ulong Used => Total - Math.Min(Free, Total);
     public double UsedFraction => Total > 0 ? Math.Clamp((double)Used / Total, 0, 1) : 0;
 }
@@ -15,6 +16,7 @@ public sealed record StorageVolume(string Letter, string Label, ulong Total, ulo
 // SolidState: a solid-state drive, the only kind asked for a temperature.
 public sealed record StorageDrive(int Number, string Model, IReadOnlyList<StorageVolume> Volumes)
 {
+    public bool External { get; init; }
     public DiskTemperature? Temperature { get; init; }
     public bool SolidState { get; init; }
     public ulong Total => Volumes.Aggregate(0UL, (sum, volume) => sum + volume.Total);
@@ -34,9 +36,8 @@ public sealed record StorageRow(string Label, ulong Total, ulong Used, double? C
     public double UsedFraction => Total > 0 ? Math.Clamp((double)Used / Total, 0, 1) : 0;
 }
 
-// The drives the system monitor shows: fixed volumes with a letter on internal drives, grouped by physical drive. Removable media
-// (a Ventoy stick, an SD card), USB drives, virtual adapters' disks, network and optical drives are left out, and so
-// are volumes too small to matter (a system reserved or recovery partition that has a letter).
+// Mounted local volumes, including USB disks and removable media, grouped by physical drive. Network, optical and virtual
+// adapter drives are left out, as are small internal recovery partitions. Small removable volumes still show their capacity.
 public static class Storage
 {
     // STORAGE_BUS_TYPE values that are not internal drives.
@@ -50,28 +51,32 @@ public static class Storage
     // A file-backed virtual disk that is not removable stays: a Dev Drive (Windows 11) is a VHDX the user keeps as a drive of its
     // own, as is a VHD mounted for good. Its space is also part of the drive that holds its file.
     public static bool Internal(StorageDisk disk) => !disk.Removable && disk.Bus is not (BusUsb or BusSd or BusMmc or BusVirtual);
+    public static bool External(StorageDisk disk) => disk.Removable || disk.Bus is BusUsb or BusSd or BusMmc;
+    public static bool Listed(StorageDisk disk) => Internal(disk) || External(disk) && disk.Bus is not (BusVirtual or BusFileBackedVirtual);
 
     // A drive behind a RAID controller is never asked for its temperature: the controller's driver answers for it, and Intel Rapid
     // Storage Technology on one laptop never answered at all, which froze the whole machine. Windows' own settings show no
     // temperature for such a drive either. Its space is listed as any other drive's.
-    public static bool AsksTemperature(StorageDisk disk) => disk.Bus != BusRaid;
+    public static bool AsksTemperature(StorageDisk disk) => Internal(disk) && disk.Bus != BusRaid;
 
     // The drives from the volumes and the physical drive each lies on (null when it spans drives or its drive is unknown), the
     // drives Windows describes, the temperatures by drive number and the solid-state drives' numbers. A volume on a drive that is
-    // not internal is left out, as is one that is too small; a volume without a known drive is a drive of its own. Drives in the
+    // not eligible is left out, as is a small internal partition; a volume without a known drive is a drive of its own. Drives in the
     // order of their first letter.
     public static List<StorageDrive> Group(IEnumerable<(StorageVolume Volume, int? Disk)> volumes, IReadOnlyDictionary<int, StorageDisk> disks,
         IReadOnlyDictionary<int, DiskTemperature>? temperatures = null, IReadOnlySet<int>? solid = null)
     {
-        var kept = volumes.Where(item => item.Volume.Total >= SmallestVolume
-            && (item.Disk is not { } number || disks.TryGetValue(number, out var disk) && Internal(disk))).ToList();
+        bool Keep(StorageVolume volume, int? number) => number is not { } value ? volume.Total >= (volume.Removable ? 1UL : SmallestVolume)
+            : disks.TryGetValue(value, out var disk) && Listed(disk) && volume.Total >= (External(disk) ? 1UL : SmallestVolume);
+        var kept = volumes.Where(item => Keep(item.Volume, item.Disk)).ToList();
         var drives = kept.Where(item => item.Disk is not null).GroupBy(item => item.Disk!.Value)
             .Select(group => new StorageDrive(group.Key, disks[group.Key].Model, group.Select(item => item.Volume).OrderBy(Letter).ToList())
             {
-                Temperature = temperatures is not null && temperatures.TryGetValue(group.Key, out var heat) ? heat : null,
-                SolidState = solid?.Contains(group.Key) == true
+                Temperature = !External(disks[group.Key]) && temperatures is not null && temperatures.TryGetValue(group.Key, out var heat) ? heat : null,
+                SolidState = !External(disks[group.Key]) && solid?.Contains(group.Key) == true,
+                External = External(disks[group.Key])
             })
-            .Concat(kept.Where(item => item.Disk is null).Select(item => new StorageDrive(-1, "", [item.Volume])))
+            .Concat(kept.Where(item => item.Disk is null).Select(item => new StorageDrive(-1, "", [item.Volume]) { External = item.Volume.Removable }))
             .OrderBy(drive => Letter(drive.Volumes[0])).ToList();
         return drives;
         static string Letter(StorageVolume volume) => volume.Letter.ToUpperInvariant();

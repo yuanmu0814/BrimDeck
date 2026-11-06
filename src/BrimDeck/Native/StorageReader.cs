@@ -5,9 +5,9 @@ using BrimDeck.Core;
 
 namespace BrimDeck.Native;
 
-// The internal drives for the system monitor (Storage): every fixed volume with a letter, its size and free space from the file
+// Local drives for the system monitor (Storage): fixed and removable volumes with letters, their size and free space from the file
 // system, the physical drive it lies on from the volume's disk extents, and what Windows says of that drive (model, bus,
-// removable media). Optionally each solid-state drive's own temperature through the storage stack's temperature property. Each
+// removable media). Optionally each internal solid-state drive's temperature through the storage stack's temperature property. Each
 // volume and drive is opened without read or write access, which a normal user may do; nothing here needs administrator rights.
 // Asking a drive for its temperature sends it a command (a few to over a hundred milliseconds, and it leaves its deepest power
 // state), and listing the volumes can wait on a slow drive, so everything is read on the thread pool: the volumes every 10
@@ -34,7 +34,7 @@ internal sealed class StorageReader
     private int _generation;
     private volatile Task _reading = Task.CompletedTask;
 
-    // Whether any internal drive with a lettered volume was found, and how many such volumes; whether any drive gave a temperature.
+    // Whether any local drive with a lettered volume was found, and how many such volumes; whether any drive gave a temperature.
     public SensorState Drives => _drives;
     public int Count => _count;
     public SensorState Temperatures => _temperatures;
@@ -126,19 +126,20 @@ internal sealed class StorageReader
             }
         }
         finally { Marshal.FreeHGlobal(query); Marshal.FreeHGlobal(output); }
-        // A volume whose drive could not be described is left out with it.
-        var described = volumes.Where(item => item.Disk is not { } number || disks.ContainsKey(number)).ToList();
+        // An undescribed fixed drive is left out; removable media still has its file-system capacity when a bridge cannot describe it.
+        var described = volumes.Where(item => item.Disk is not { } number || disks.ContainsKey(number) || item.Volume.Removable)
+            .Select(item => (item.Volume, Disk: item.Disk is { } number && !disks.ContainsKey(number) ? null : item.Disk)).ToList();
         var plain = Core.Storage.Group(described, disks, solid: solid);
         _plain = plain;
         _heated = Core.Storage.Group(described, disks, _known, solid);
         _count = Core.Storage.VolumeCount(plain);
-        if (plain.Count > 0) _drives = SensorState.Found; else if (_drives == SensorState.Unknown) _drives = SensorState.None;
+        _drives = plain.Count > 0 ? SensorState.Found : SensorState.None;
     }
 
-    // Every fixed volume with a letter that is ready, with the drive it lies on (null when its extents span drives), each volume
+    // Every ready fixed/removable volume with a letter, with the drive it lies on (null when its extents span drives), each volume
     // once. A letter made with subst (a folder of another volume, \??\C:\...) is left out, as is a second letter of a volume already
-    // listed (by its volume GUID), and a volume whose extents cannot be read: a VeraCrypt or ImDisk volume is a file or memory on
-    // another drive, already counted there, or not a drive at all.
+    // listed (by its volume GUID). Fixed volumes whose extents cannot be read are left out: a VeraCrypt or ImDisk volume is a file
+    // or memory on another drive, already counted there, or not a drive at all. Removable media can fall back to its capacity alone.
     public static List<(StorageVolume Volume, int? Disk)> Volumes()
     {
         var volumes = new List<(StorageVolume, int?)>();
@@ -151,15 +152,17 @@ internal sealed class StorageReader
             {
                 try
                 {
-                    if (drive.DriveType != DriveType.Fixed || !drive.IsReady) continue;
+                    bool removable = drive.DriveType == DriveType.Removable;
+                    if (drive.DriveType != DriveType.Fixed && !removable || !drive.IsReady) continue;
                     string letter = drive.Name.TrimEnd('\\');
                     if (QueryDosDeviceW(letter, text, text.Length) > 0 && Text(text).StartsWith(@"\??\", StringComparison.Ordinal)) continue;
                     if (GetVolumeNameForVolumeMountPointW(letter + @"\", text, text.Length) && !seen.Add(Text(text))) continue;
-                    if (Disk(letter, extents) is not { Readable: true } placed) continue;
+                    var placed = Disk(letter, extents);
+                    if (!placed.Readable && !removable) continue;
                     string label = "";
                     try { label = drive.VolumeLabel; } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-                    var volume = new StorageVolume(letter, label, (ulong)Math.Max(0, drive.TotalSize), (ulong)Math.Max(0, drive.TotalFreeSpace));
-                    volumes.Add((volume, placed.Disk));
+                    var volume = new StorageVolume(letter, label, (ulong)Math.Max(0, drive.TotalSize), (ulong)Math.Max(0, drive.TotalFreeSpace)) { Removable = removable };
+                    volumes.Add((volume, placed.Readable ? placed.Disk : null));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Debug.WriteLine(ex); }
             }

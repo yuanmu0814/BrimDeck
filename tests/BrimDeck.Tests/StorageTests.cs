@@ -18,6 +18,7 @@ static class StorageTests
     {
         Grouping(check);
         Exclusions(check);
+        ExternalDrives(check);
         Lines(check);
         Figures(check);
         Temperatures_(check);
@@ -45,7 +46,8 @@ static class StorageTests
     {
         var drives = Storage.Group([(Volume("C:", 300, 50), 0), (Volume("R:", .5, .1, "Recovery"), 0), (Volume("V:", 64, 1, "Ventoy"), 3), (Volume("X:", 40, 10), 4),
             (Volume("S:", 32, 16), 5), (Volume("U:", 1000, 500), 6), (Volume("H:", 2000, 1500), 2), (Volume("Z:", 100, 50), 9), (Volume("Q:", 50, 10), 7), (Volume("W:", 50, 10), 8)], Disks);
-        check("Storage: removable, USB, SD, virtual adapters' and removable virtual drives are left out", drives.SelectMany(drive => drive.Volumes).All(volume => volume.Letter is not ("V:" or "S:" or "U:" or "Q:" or "W:")));
+        check("Storage: USB disks, USB sticks and SD cards are included", new[] { "V:", "S:", "U:" }.All(letter => drives.Any(drive => drive.Letters == letter && drive.External)));
+        check("Storage: virtual adapters and removable virtual drives are left out", drives.SelectMany(drive => drive.Volumes).All(volume => volume.Letter is not ("Q:" or "W:")));
         check("Storage: a Dev Drive (a fixed VHDX) stays", drives.Any(drive => drive.Letters == "X:"));
         check("Storage: a small partition (system reserved, recovery) is not listed", drives[0].Letters == "C:");
         check("Storage: a hard disk's space is listed (only its temperature is not asked for)", drives.Any(drive => drive.Letters == "H:"));
@@ -56,6 +58,32 @@ static class StorageTests
         check("Storage: a drive behind a RAID controller is listed but not asked for its temperature", Storage.Internal(new("", Storage.BusRaid, false))
             && !Storage.AsksTemperature(new("", Storage.BusRaid, false)) && Storage.AsksTemperature(new("", 17, false)) && Storage.AsksTemperature(new("", 11, false)));
         check("Storage: exactly 1 GB is listed", Storage.Group([(new StorageVolume("C:", "", G, 0), 0)], Disks).Count == 1 && Storage.Group([(new StorageVolume("C:", "", G - 1, 0), 0)], Disks).Count == 0);
+    }
+
+    private static void ExternalDrives(Action<string, bool> check)
+    {
+        var smallUsb = Storage.Group([(Volume("U:", .5, .1), 3)], Disks);
+        check("USB: even a small ready stick has a capacity reading", smallUsb is [{ External: true }] && smallUsb[0].Volumes[0].Total == G / 2);
+        var fallback = Storage.Group([(Volume("V:", .5, .1) with { Removable = true }, null)], Disks);
+        check("USB: removable media without physical extents still shows its volume", fallback is [{ Number: -1, External: true, Letters: "V:" }]);
+        check("USB: an empty or unready volume has no false capacity", Storage.Group([(Volume("U:", 0, 0), 3)], Disks).Count == 0);
+        var usb = Storage.Group([(Volume("U:", 1000, 500), 6)], Disks, new Dictionary<int, DiskTemperature> { [6] = new("old reading", 60) }, new HashSet<int> { 6 });
+        check("USB: stale internal temperatures are never assigned to a USB disk", usb is [{ External: true, Temperature: null, SolidState: false }]);
+        check("USB: only internal non-RAID drives allow temperature requests", !Storage.AsksTemperature(Disks[3]) && !Storage.AsksTemperature(Disks[5]) && !Storage.AsksTemperature(Disks[6]) && Storage.AsksTemperature(Disks[0]));
+
+        var attached = Storage.Group([(Volume("C:", 300, 50), 0), (Volume("D:", 12000, 9000), 3), (Volume("E:", 1000, 200), 1), (Volume("F:", 12000, 4000), 6)], Disks);
+        var detached = Storage.Group([(Volume("C:", 300, 50), 0), (Volume("E:", 1000, 200), 1)], Disks);
+        check("USB: all four letters have their own capacity rows", Storage.Rows(attached, 4).Select(row => row.Label).SequenceEqual(["C:", "D:", "E:", "F:"]));
+        var readings = CompactMonitor.Normalize([new() { Item = CompactMonitorItems.Storage, Sources = ["D:", "F:"] }]);
+        var admission = new StripAdmission();
+        var states = SensorStates.Unknown with { Storage = SensorState.Found };
+        var snapshot = MonitorSnapshot.Empty(4, "test") with { Storage = attached };
+        admission.Update(snapshot, readings, states);
+        check("USB: chosen letters join the capsule", admission.Letters(readings[0]).SequenceEqual(["D:", "F:"]));
+        admission.Update(snapshot with { Storage = detached }, readings, states);
+        check("USB: unplugged letters leave instead of retaining old figures", admission.Letters(readings[0]).Count == 0 && (admission.Hidden & CompactMonitorItems.Storage) != 0);
+        admission.Update(snapshot, readings, states);
+        check("USB: a later snapshot restores reattached letters", admission.Letters(readings[0]).SequenceEqual(["D:", "F:"]));
     }
 
     private static List<StorageDrive> Machine(int count) => Storage.Group(

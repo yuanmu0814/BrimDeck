@@ -79,7 +79,7 @@ internal static class TemperatureChecks
     {
         var watch = Stopwatch.StartNew();
         var volumes = StorageReader.Volumes();
-        Console.WriteLine($"  {volumes.Count} fixed volume(s), listed in {watch.Elapsed.TotalMilliseconds:0} ms");
+        Console.WriteLine($"  {volumes.Count} local volume(s), listed in {watch.Elapsed.TotalMilliseconds:0} ms");
         foreach (var (volume, disk) in volumes)
             Console.WriteLine($"  Volume {volume.Letter} \"{volume.Label}\": {volume.Used / 1073741824d:0.0} / {volume.Total / 1073741824d:0.0} GB on drive {disk?.ToString() ?? "?"}");
         check("volumes: each has a letter and a size, its free space within it", volumes.All(item => item.Volume.Letter.EndsWith(':') && item.Volume.Total > 0 && item.Volume.Free <= item.Volume.Total));
@@ -98,10 +98,10 @@ internal static class TemperatureChecks
         check("drives: each volume on one drive only, the drive's volumes in letter order",
             drives.SelectMany(drive => drive.Volumes).Select(volume => volume.Letter).Distinct(StringComparer.OrdinalIgnoreCase).Count() == drives.Sum(drive => drive.Volumes.Count)
             && drives.All(drive => drive.Volumes.Select(volume => volume.Letter).SequenceEqual(drive.Volumes.Select(volume => volume.Letter).Order(StringComparer.OrdinalIgnoreCase))));
-        var placed = volumes.Where(item => item.Disk is not null && item.Volume.Total >= Storage.SmallestVolume).ToList();
+        var placed = volumes.Where(item => item.Disk is not null).ToList();
         check("drives: a listed volume sits on the drive its extents name", drives.All(drive => drive.Number < 0
             || drive.Volumes.All(volume => placed.Any(item => item.Volume.Letter == volume.Letter && item.Disk == drive.Number))));
-        check("drives: small volumes are left out", drives.SelectMany(drive => drive.Volumes).All(volume => volume.Total >= Storage.SmallestVolume));
+        check("drives: small internal partitions are left out", drives.Where(drive => !drive.External).SelectMany(drive => drive.Volumes).All(volume => volume.Total >= Storage.SmallestVolume));
         check("drives: the Windows drive is among them", drives.Count == 0 || Storage.System(drives, Storage.WindowsLetter)?.Volumes.Any(volume => volume.Letter.Equals(Storage.WindowsLetter, StringComparison.OrdinalIgnoreCase)) == true);
         check("drives: temperatures plausible, in order, and their drive's own", drives.All(drive => drive.Temperature is not { } heat
             || Temperatures.Plausible(heat.Celsius) is not null && heat.Number == drive.Number && (heat.Warning is not { } w || heat.Critical is not { } c || w <= c)));

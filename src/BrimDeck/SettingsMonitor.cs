@@ -74,7 +74,7 @@ public sealed partial class SettingsWindow
                 keepPreview: true),
             Toggle(Loc.T("显示硬盘", "Show drives"), S.MonitorStorage, v => Resize(s => s.MonitorStorage = v, DeckPage.Monitor),
                 help:
-                Loc.T("不含 U 盘、移动硬盘、网络盘和光驱。", "USB, external, network and optical drives are not included."),
+                Loc.T("包含内置硬盘、USB 移动硬盘和 U 盘；不含网络盘和光驱。", "Includes internal drives, USB disks and USB sticks; network and optical drives are not included."),
                 keepPreview: true),
             Toggle(Loc.T("显示功耗与电池", "Show power and battery"), S.MonitorPower, v => Resize(s => s.MonitorPower = v, DeckPage.Monitor),
                 help:
@@ -587,7 +587,7 @@ public sealed partial class SettingsWindow
             {
                 bool on = figures.Contains(figure);
                 string? help = figure == CompactFigures.Temperature
-                    ? drives ? Loc.T("固态硬盘的温度，显示在已用空间下方；机械硬盘不显示。", "A solid-state drive's temperature, under its space in use; not shown for hard disks.")
+                    ? drives ? Loc.T("内置固态硬盘的温度，显示在已用空间下方；机械硬盘和 USB 盘不显示。", "An internal solid-state drive's temperature, under its space in use; not shown for hard disks or USB drives.")
                         : Loc.T("显示在占用下方；读不到温度的电脑上不显示。", "Shown under the usage; not shown on a PC whose temperature cannot be read.")
                     : null;
                 Entry(FigureName(figure), on, on && figures.Count == 1, help, () =>
@@ -626,17 +626,23 @@ public sealed partial class SettingsWindow
         }
         // The menu is filled before it opens: filled as it opened, it grew while dropping into place (Soft.Enter), and WPF placed
         // it again with the drop's offset, six DIPs below its button.
-        if (drives && listed is null)
+        Native.StorageReader? driveReader = drives ? new() : null;
+        void RefreshDrives()
         {
-            // Nothing read the drives yet: they are read once here, off the UI thread, while the page is open.
-            var reader = new Native.StorageReader();
-            reader.Start(false);
-            reader.Pending.ContinueWith(_ => Dispatcher.BeginInvoke(() => { listed = reader.Listed; if (menu.IsOpen) Fill(); }));
+            if (driveReader is null) return;
+            driveReader.Start(false);
+            driveReader.Pending.ContinueWith(_ => Dispatcher.BeginInvoke(() => { listed = driveReader.Listed; if (menu.IsOpen) Fill(); }));
         }
+        if (drives && listed is null) RefreshDrives();
         // The menu sits right against its button rather than the app list's four DIPs below it.
         select.Click += (_, _) =>
         {
             if (menu.IsOpen) return;
+            if (drives)
+            {
+                if (_app.Monitor?.Latest is { } latest) listed = latest.Storage;
+                RefreshDrives();
+            }
             Fill();
             FitMenuToScreen(select, menu, surface);
             menu.VerticalOffset = 0;
