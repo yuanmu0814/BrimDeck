@@ -19,6 +19,7 @@ static class StorageTests
         Grouping(check);
         Exclusions(check);
         ExternalDrives(check);
+        UsbTemperatures(check);
         Lines(check);
         Figures(check);
         Temperatures_(check);
@@ -67,9 +68,7 @@ static class StorageTests
         var fallback = Storage.Group([(Volume("V:", .5, .1) with { Removable = true }, null)], Disks);
         check("USB: removable media without physical extents still shows its volume", fallback is [{ Number: -1, External: true, Letters: "V:" }]);
         check("USB: an empty or unready volume has no false capacity", Storage.Group([(Volume("U:", 0, 0), 3)], Disks).Count == 0);
-        var usb = Storage.Group([(Volume("U:", 1000, 500), 6)], Disks, new Dictionary<int, DiskTemperature> { [6] = new("old reading", 60) }, new HashSet<int> { 6 });
-        check("USB: stale internal temperatures are never assigned to a USB disk", usb is [{ External: true, Temperature: null, SolidState: false }]);
-        check("USB: only internal non-RAID drives allow temperature requests", !Storage.AsksTemperature(Disks[3]) && !Storage.AsksTemperature(Disks[5]) && !Storage.AsksTemperature(Disks[6]) && Storage.AsksTemperature(Disks[0]));
+        check("USB: USB bridges allow temperature requests while SD readers do not", Storage.AsksTemperature(Disks[3]) && !Storage.AsksTemperature(Disks[5]) && Storage.AsksTemperature(Disks[6]) && Storage.AsksTemperature(Disks[0]));
 
         var attached = Storage.Group([(Volume("C:", 300, 50), 0), (Volume("D:", 12000, 9000), 3), (Volume("E:", 1000, 200), 1), (Volume("F:", 12000, 4000), 6)], Disks);
         var detached = Storage.Group([(Volume("C:", 300, 50), 0), (Volume("E:", 1000, 200), 1)], Disks);
@@ -84,6 +83,42 @@ static class StorageTests
         check("USB: unplugged letters leave instead of retaining old figures", admission.Letters(readings[0]).Count == 0 && (admission.Hidden & CompactMonitorItems.Storage) != 0);
         admission.Update(snapshot, readings, states);
         check("USB: a later snapshot restores reattached letters", admission.Letters(readings[0]).SequenceEqual(["D:", "F:"]));
+    }
+
+    private static void UsbTemperatures(Action<string, bool> check)
+    {
+        static byte[] Smart(params (byte Id, byte Raw)[] attributes)
+        {
+            var bytes = new byte[512]; bytes[0] = 1;
+            for (int i = 0; i < attributes.Length; i++)
+            {
+                int offset = 2 + 12 * i;
+                bytes[offset] = attributes[i].Id; bytes[offset + 3] = 100; bytes[offset + 4] = 90; bytes[offset + 5] = attributes[i].Raw;
+            }
+            bytes[511] = unchecked((byte)-bytes.Sum(value => (int)value));
+            return bytes;
+        }
+        var data = Smart((194, 43));
+        check("USB SMART: raw Celsius is used rather than the health score", Temperatures.SmartDisk("USB HDD", data)?.Celsius == 43);
+        check("USB SMART: disk temperature wins over airflow", Temperatures.SmartDisk("USB HDD", Smart((190, 38), (194, 43)))?.Celsius == 43);
+        check("USB SMART: airflow can supply a temperature", Temperatures.SmartDisk("USB HDD", Smart((190, 38)))?.Celsius == 38);
+        check("USB SMART: invalid disk temperature can fall back to airflow", Temperatures.SmartDisk("USB HDD", Smart((194, 255), (190, 38)))?.Celsius == 38);
+        check("USB SMART: a stick without a temperature stays unavailable", Temperatures.SmartDisk("USB stick", Smart((9, 42))) is null);
+        check("USB SMART: zero, invalid and out-of-range sensors stay unavailable", new byte[] { 0, 126, 255 }.All(raw => Temperatures.SmartDisk("USB", Smart((194, raw))) is null));
+        check("USB SMART: truncated, oversized and empty responses are rejected", Temperatures.SmartDisk("USB", data.AsSpan(0, 511)) is null
+            && Temperatures.SmartDisk("USB", new byte[513]) is null && Temperatures.SmartDisk("USB", new byte[512]) is null);
+        data[100] ^= 1;
+        check("USB SMART: a corrupted response is rejected", Temperatures.SmartDisk("USB", data) is null);
+
+        var heat = new Dictionary<int, DiskTemperature> { [3] = new("USB HDD", 43) { Number = 3 }, [0] = new("SSD", 52) { Number = 0 } };
+        var drives = Storage.Group([(Volume("D:", 12000, 9000), 3), (Volume("F:", 12000, 4000), 6)], Disks, heat);
+        check("USB temperature: attached to its own physical disk, not the other USB disk", drives[0] is { External: true, SolidState: false, Temperature.Celsius: 43 } && drives[1].Temperature is null);
+        check("USB temperature: page rows use the same temperature field as internal drives", Storage.Rows(drives, 2) is [{ Label: "D:", Celsius: 43 }, { Label: "F:", Celsius: null }]);
+        var snapshot = MonitorSnapshot.Empty(4, "test") with { Storage = drives };
+        var states = SensorStates.Unknown with { Storage = SensorState.Found, DiskTemperatures = SensorState.Found };
+        check("USB temperature: a mechanical USB disk's available temperature is admitted to the capsule", !CompactSources.HeatMissing("D:", snapshot, states) && CompactSources.Heat("D:", snapshot)?.Celsius == 43);
+        check("USB temperature: a disk with no sensor stays hidden", CompactSources.HeatMissing("F:", snapshot, states));
+        check("USB temperature: turning temperatures off leaves capacity rows", Storage.Rows(drives, 2, temperatures: false).All(row => row.Celsius is null));
     }
 
     private static List<StorageDrive> Machine(int count) => Storage.Group(

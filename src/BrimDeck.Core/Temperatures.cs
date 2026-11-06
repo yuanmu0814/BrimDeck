@@ -2,7 +2,7 @@ using System.Globalization;
 
 namespace BrimDeck.Core;
 
-// A solid-state drive's temperature as the drive reports it, in degrees Celsius, with the drive's own warning and critical
+// A drive's temperature as the drive reports it, in degrees Celsius, with the drive's own warning and critical
 // temperatures where it gives them. Name is the drive's model, Number its number (\\.\PhysicalDriveN), -1 where unknown.
 public sealed record DiskTemperature(string Name, double Celsius, double? Warning = null, double? Critical = null)
 {
@@ -60,6 +60,24 @@ public static class Temperatures
         var (w, c) = (own(warning), own(critical));
         if (w is { } low && c is { } high && high < low) (w, c) = (null, null);
         return new DiskTemperature(name.Trim(), value, w, c);
+    }
+
+    // SMART READ DATA: a complete, checksummed 512-byte sector with 30 attributes at byte 2, 12 bytes each. Temperature is the
+    // raw Celsius byte, never the normalized health score. Prefer the disk's temperature (194), then airflow temperature (190).
+    public static DiskTemperature? SmartDisk(string name, ReadOnlySpan<byte> data)
+    {
+        if (data.Length != 512 || data[0] == 0 && data[1] == 0 || data[0] == 255 && data[1] == 255) return null;
+        int sum = 0;
+        foreach (byte value in data) sum += value;
+        if ((sum & 255) != 0) return null;
+        double? airflow = null;
+        for (int offset = 2; offset < 362; offset += 12)
+        {
+            if (data[offset] is not (194 or 190) || Plausible(data[offset + 5]) is not { } celsius) continue;
+            if (data[offset] == 194) return new DiskTemperature(name.Trim(), celsius);
+            airflow = celsius;
+        }
+        return airflow is { } fallback ? new DiskTemperature(name.Trim(), fallback) : null;
     }
 
     public static MemoryLevel Level(double celsius, double warning, double critical) => celsius >= critical ? MemoryLevel.Critical : celsius >= warning ? MemoryLevel.Elevated : MemoryLevel.Normal;

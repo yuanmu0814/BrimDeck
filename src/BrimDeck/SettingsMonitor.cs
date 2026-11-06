@@ -59,7 +59,7 @@ public sealed partial class SettingsWindow
         SectionTitle(Loc.T("通用", "General"));
         Group(Row(Loc.T("各项颜色", "Reading colors"), roles),
             QuickRow(Loc.T("快捷预设", "Presets"), presets),
-            GpuChoiceRow());
+            GpuChoiceRow(), UsbTemperatureRow());
         CompactMonitorOptions();
         SectionTitle(Loc.T("展开时", "When expanded"));
         // The choices that show themselves on the monitor page keep its preview open, so switching between them does not collapse it first.
@@ -92,6 +92,38 @@ public sealed partial class SettingsWindow
                 Loc.T("读不到的温度不显示。CPU 温度由主板固件提供，许多电脑没有这项数据；有的电脑读到的是主板的温度，不是 CPU 本身的温度。",
                     "Temperatures that cannot be read are not shown. The CPU temperature comes from the motherboard firmware. Many PCs do not provide it, and on some it is the motherboard's temperature rather than the CPU's."),
                 keepPreview: true)));
+    }
+
+    private FrameworkElement UsbTemperatureRow()
+    {
+        var status = TextLine("", 12.5, TextTertiary);
+        status.TextWrapping = TextWrapping.Wrap;
+        bool busy = false;
+        var button = ActionButton("", () => { });
+        void Fill()
+        {
+            bool active = Native.UsbTemperatureAccess.Active;
+            var temperatures = string.Join(" · ", Native.UsbTemperatureAccess.Latest.Where(drive => drive.Temperature is not null)
+                .Select(drive => drive.Letters + " " + Temperatures.Detail(drive.Temperature!.Celsius)));
+            button.Content = active ? Loc.T("停用", "Turn off") : Loc.T("授权读取", "Allow reading");
+            button.IsEnabled = !busy;
+            status.Text = busy ? Loc.T("等待 Windows 管理员确认…", "Waiting for Windows administrator confirmation…")
+                : active ? temperatures.Length > 0 ? temperatures : Loc.T("采集助手已启用，转接盒未返回温度。", "The helper is on; the bridge did not report a temperature.")
+                : Loc.T("转接盒需要 SMART 权限时，授权仅限本次运行的温度采集助手。", "For bridges that need SMART access, allow a temperature helper for this run.");
+        }
+        button.Click += async (_, _) =>
+        {
+            if (busy) return;
+            if (Native.UsbTemperatureAccess.Active) { Native.UsbTemperatureAccess.Stop(); Fill(); return; }
+            busy = true; Fill();
+            try { await Native.UsbTemperatureAccess.EnableAsync(); }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or System.IO.IOException or UnauthorizedAccessException or OperationCanceledException or TimeoutException)
+            { status.Text = Loc.T("无法启用：", "Could not enable: ") + ex.Message; busy = false; button.IsEnabled = true; return; }
+            busy = false; Fill();
+        };
+        AutomationProperties.SetName(button, Loc.T("授权读取 USB 硬盘温度", "Allow reading USB disk temperatures"));
+        Fill();
+        return Row(Loc.T("USB 硬盘温度", "USB disk temperatures"), button, status);
     }
 
     // Under the last row of "展开时": a line in amber for every reading stopped because its driver did not answer (SensorGuard),
@@ -587,7 +619,7 @@ public sealed partial class SettingsWindow
             {
                 bool on = figures.Contains(figure);
                 string? help = figure == CompactFigures.Temperature
-                    ? drives ? Loc.T("内置固态硬盘的温度，显示在已用空间下方；机械硬盘和 USB 盘不显示。", "An internal solid-state drive's temperature, under its space in use; not shown for hard disks or USB drives.")
+                    ? drives ? Loc.T("硬盘温度显示在已用空间下方；USB 盘也会显示可读取的温度。", "Drive temperatures appear under their space in use, including readable USB disk temperatures.")
                         : Loc.T("显示在占用下方；读不到温度的电脑上不显示。", "Shown under the usage; not shown on a PC whose temperature cannot be read.")
                     : null;
                 Entry(FigureName(figure), on, on && figures.Count == 1, help, () =>

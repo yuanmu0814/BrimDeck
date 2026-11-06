@@ -59,7 +59,7 @@ public static class CompactFrames
 }
 
 // The drive letters the collapsed row's drive reading shows (CompactReading.Sources): each lettered volume's space in use and,
-// when chosen, the temperature of the solid-state drive holding it. Several letters show side by side after one glyph, each
+// when chosen, the temperature of the drive holding it. Several letters show side by side after one glyph, each
 // after its letter: "C 45% D 60%".
 public static class CompactSources
 {
@@ -86,7 +86,7 @@ public static class CompactSources
         snapshot is not null && Storage.Find(snapshot.Storage, letter)?.Drive.Temperature is { } disk ? (disk.Celsius, Temperatures.OfDisk(disk)) : null;
 
     // Whether a letter is known to have nothing to show: no drive is listed at all, or, once the drives are read, none holds it (a
-    // drive taken out). Its temperature also when the drive holding it is not solid-state, or once no drive gives one.
+    // drive taken out). Its temperature also when no drive gives one, or a non-solid-state drive has no reading of its own.
     public static bool Missing(string letter, MonitorSnapshot? snapshot, SensorStates states)
     {
         if (states.Storage == SensorState.None) return true;
@@ -95,6 +95,6 @@ public static class CompactSources
     public static bool HeatMissing(string letter, MonitorSnapshot? snapshot, SensorStates states)
     {
         if (Missing(letter, snapshot, states) || states.DiskTemperatures == SensorState.None) return true;
-        return states.Storage == SensorState.Found && snapshot is { Storage.Count: > 0 } && Storage.Find(snapshot.Storage, letter) is { Drive.SolidState: false };
+        return states.Storage == SensorState.Found && snapshot is { Storage.Count: > 0 } && Storage.Find(snapshot.Storage, letter) is { Drive: { SolidState: false, Temperature: null } };
     }
 }

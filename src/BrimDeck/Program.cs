@@ -5,6 +5,9 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // The USB temperature helper reads only disk sensors, without constructing the app or starting its AI engine.
+        if (args is [Native.UsbTemperatureAccess.ElevatedSwitch, var pipe, var parent])
+        { Environment.ExitCode = Native.UsbTemperatureAccess.RunHelperAsync(pipe, parent).GetAwaiter().GetResult(); return; }
         // A newer portable version started to replace this folder's files; it does that and exits without opening the app.
         if (Core.PortableUpdate.TryRun(args, out var exitCode)) { Environment.ExitCode = exitCode; return; }
         // The elevated instance a player's install starts writes its libcef.dll and exits without opening the app.

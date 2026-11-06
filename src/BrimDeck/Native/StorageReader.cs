@@ -7,12 +7,12 @@ namespace BrimDeck.Native;
 
 // Local drives for the system monitor (Storage): fixed and removable volumes with letters, their size and free space from the file
 // system, the physical drive it lies on from the volume's disk extents, and what Windows says of that drive (model, bus,
-// removable media). Optionally each internal solid-state drive's temperature through the storage stack's temperature property. Each
+// removable media). Optionally each internal solid-state drive's and USB disk's temperature through the storage stack. Each
 // volume and drive is opened without read or write access, which a normal user may do; nothing here needs administrator rights.
 // Asking a drive for its temperature sends it a command (a few to over a hundred milliseconds, and it leaves its deepest power
 // state), and listing the volumes can wait on a slow drive, so everything is read on the thread pool: the volumes every 10
-// seconds, the temperatures every 30, never on a tick. Hard disks are not asked for a temperature, as asking could spin one up,
-// nor are drives behind a RAID controller (Storage.AsksTemperature). Each temperature query is guarded (SensorGuard): a drive whose
+// seconds, the temperatures every 30, never on a tick. Internal hard disks and drives behind a RAID controller are not asked for
+// a temperature (Storage.AsksTemperature). Each temperature query is guarded (SensorGuard): a drive whose
 // query never answered is not asked again, and a reading stuck on one is given up so the next can start.
 // The readings and states are kept while the sampler pauses, so a page opened again has its drives at once.
 internal sealed class StorageReader
@@ -33,6 +33,7 @@ internal sealed class StorageReader
     // Raised when a reading stuck on a drive is given up (SensorGuard): only the reading of this generation may say it has ended.
     private int _generation;
     private volatile Task _reading = Task.CompletedTask;
+    private int _usbGeneration = -1;
 
     // Whether any local drive with a lettered volume was found, and how many such volumes; whether any drive gave a temperature.
     public SensorState Drives => _drives;
@@ -61,7 +62,7 @@ internal sealed class StorageReader
     public IReadOnlyList<StorageDrive> Sample(double now, bool temperatures)
     {
         // Temperatures asked for after the drives were read without them are read at once rather than at the next reading.
-        if (now - _readAt >= Every || temperatures && _temperatures == SensorState.Unknown && _drives != SensorState.Unknown)
+        if (now - _readAt >= Every || temperatures && (_temperatures == SensorState.Unknown && _drives != SensorState.Unknown || _usbGeneration != UsbTemperatureAccess.Generation))
         {
             _readAt = now; Start(temperatures);
         }
@@ -101,21 +102,24 @@ internal sealed class StorageReader
             }
             // Not asked for, the temperatures read before are dropped rather than kept to show later as if current.
             if (!temperatures) _known = [];
-            else if (now - _temperaturesAt >= TemperatureEvery || _temperatures == SensorState.Unknown)
+            else if (now - _temperaturesAt >= TemperatureEvery || _temperatures == SensorState.Unknown || _usbGeneration != UsbTemperatureAccess.Generation)
             {
+                _usbGeneration = UsbTemperatureAccess.Generation;
                 _temperaturesAt = now;
                 var known = new Dictionary<int, DiskTemperature>();
-                foreach (int number in solid.Where(number => Core.Storage.AsksTemperature(disks[number])))
+                foreach (int number in numbers.Where(number => disks.TryGetValue(number, out var described) && Core.Storage.AsksTemperature(described)
+                    && (solid.Contains(number) || described.Bus == Core.Storage.BusUsb)))
                 {
                     var disk = disks[number];
-                    var guarded = new GuardedDevice(GuardedReading.DriveTemperature, disk.Model + " | " + disk.Bus, disk.Model.Length > 0 ? disk.Model : "SSD");
+                    var guarded = new GuardedDevice(GuardedReading.DriveTemperature, disk.Model + " | " + disk.Bus, disk.Model.Length > 0 ? disk.Model : "Disk");
                     if (SensorGuard.Stopped(guarded.Reading, guarded.Device)) continue;
                     var device = Open($@"\\.\PhysicalDrive{number}");
                     if (device == InvalidHandle) continue;
                     try
                     {
                         // Given up on, the next reading starts without waiting for this one, and skips the drive.
-                        var heat = SensorGuard.Ask(guarded, () => Temperature(device, query, output, disk.Model), () => GiveUp(generation));
+                        var heat = SensorGuard.Ask(guarded, () => Temperature(device, query, output, disk.Model)
+                            ?? (disk.Bus == Core.Storage.BusUsb ? UsbDiskTemperature.Read(number, disk.Model) ?? UsbTemperatureAccess.Read(number, disk.Model) : null), () => GiveUp(generation));
                         if (heat is not null) known[number] = heat with { Number = number };
                     }
                     finally { CloseHandle(device); }
@@ -196,6 +200,16 @@ internal sealed class StorageReader
     }
 
     // STORAGE_DEVICE_DESCRIPTOR: RemovableMedia at 10, the offset of ProductId at 16, BusType at 28.
+    internal static StorageDisk? Describe(int number)
+    {
+        if (number is < 0 or >= MaximumDrives) return null;
+        var device = Open($@"\\.\PhysicalDrive{number}");
+        if (device == InvalidHandle) return null;
+        var query = Marshal.AllocHGlobal(QuerySize); var output = Marshal.AllocHGlobal(OutputSize);
+        try { return Describe(device, query, output); }
+        finally { Marshal.FreeHGlobal(query); Marshal.FreeHGlobal(output); CloseHandle(device); }
+    }
+
     private static StorageDisk? Describe(IntPtr device, IntPtr query, IntPtr output)
     {
         if (!Property(device, query, output, DeviceProperty, out int length) || length < 32) return null;
@@ -213,7 +227,7 @@ internal sealed class StorageReader
     private static DiskTemperature? Temperature(IntPtr device, IntPtr query, IntPtr output, string model)
     {
         if (!Property(device, query, output, TemperatureProperty, out int length) || length < 40 || Marshal.ReadInt16(output, 12) < 1) return null;
-        return Core.Temperatures.Disk(model.Length > 0 ? model : "SSD", Marshal.ReadInt16(output, 26), Marshal.ReadInt16(output, 10), Marshal.ReadInt16(output, 8));
+        return Core.Temperatures.Disk(model.Length > 0 ? model : "Disk", Marshal.ReadInt16(output, 26), Marshal.ReadInt16(output, 10), Marshal.ReadInt16(output, 8));
     }
 
     // STORAGE_PROPERTY_QUERY: PropertyId, QueryType (0, the standard query), one byte of parameters.

@@ -128,6 +128,14 @@ public partial class App : Application
         if (e.Args.Contains("--settings")) OpenSettings();
         // A portable update that kept this version says why on the About page.
         else if (Updates.RestartFailed) OpenUpdateSettings();
+        if (e.Args.Contains("--allow-usb-temperatures")) _ = AllowUsbTemperaturesAsync();
+    }
+
+    private async Task AllowUsbTemperaturesAsync()
+    {
+        try { await UsbTemperatureAccess.EnableAsync(); OpenSettings(); _settingsWindow?.ShowPage(SettingsWindow.MonitorSettingsPage); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException or OperationCanceledException or TimeoutException)
+        { OpenSettings(); _settingsWindow?.ShowPage(SettingsWindow.MonitorSettingsPage); }
     }
     // A resident app must not vanish without a trace. Unhandled errors are appended to crash.log in the data folder;
     // errors on the UI thread are logged and the app keeps running, and unobserved task errors are only logged.
@@ -441,7 +449,7 @@ public partial class App : Application
         Microsoft.Win32.SystemEvents.PowerModeChanged -= ActivityPowerChanged;
         _activityEngine?.Dispose();
         Exiting = true; Lifetime.Cancel(); _save.Stop(); FinishWriting(); StopBackgroundUpdates(); DisplayPower.Uninstall(); Microsoft.Win32.SystemEvents.UserPreferenceChanged -= SystemThemeChanged; _tray?.Dispose(); DisposeHotkeys(); WindowDrags?.Dispose(); _listener?.Unregister(null); _settingsEvent?.Dispose();
-        Media?.Dispose(); Monitor?.Dispose(); SensorGuard.Finish(); Lyrics?.Dispose(); Prices?.Dispose(); _mutex?.Dispose(); base.OnExit(e);
+        Media?.Dispose(); Monitor?.Dispose(); UsbTemperatureAccess.Stop(); SensorGuard.Finish(); Lyrics?.Dispose(); Prices?.Dispose(); _mutex?.Dispose(); base.OnExit(e);
     }
     [DllImport("shell32", CharSet = CharSet.Unicode)] private static extern int SetCurrentProcessExplicitAppUserModelID(string id);
 }

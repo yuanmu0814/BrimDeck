@@ -866,7 +866,12 @@ internal sealed class Renderer(App app, string output, string language, string[]
         const ulong gb = 1UL << 30;
         StorageDrive[] drives = [new(0, "Demo SSD", [new("C:", "System", 476 * gb, 104 * gb)]) { Temperature = new("Demo SSD", 43) },
             new(1, "Demo SSD", [new("E:", "Data", 1740 * gb, 205 * gb)]) { Temperature = new("Demo SSD", 42) }];
-        if (usb) drives = [.. drives, new(2, "USB disk", [new("D:", "", 11175 * gb, 8800 * gb)]) { External = true }, new(3, "USB disk", [new("F:", "", 11175 * gb, 4120 * gb)]) { External = true }];
+        if (usb)
+        {
+            _settings.MonitorTemperatures = true;
+            drives = [.. drives, new(2, "USB disk", [new("D:", "", 11175 * gb, 8800 * gb)]) { External = true, Temperature = new("USB disk", 39) },
+                new(3, "USB disk", [new("F:", "", 11175 * gb, 4120 * gb)]) { External = true, Temperature = new("USB disk", 41) }];
+        }
         var sample = MonitorSample() with { Fans = new FanSample(4760, 4607), Power = new PowerSample(53, PowerOrigin.Estimated, PowerSource.Components, []), Storage = drives };
         // Seed a paused sampler with invented hardware states. Exiting prevents its worker from starting.
         var samplerType = Type.GetType("BrimDeck.Native.SystemSampler, BrimDeck")!;
@@ -899,6 +904,7 @@ internal sealed class Renderer(App app, string output, string language, string[]
                     var diskView = (FrameworkElement)Program.Field(view, "_storage")!;
                     var rows = (IReadOnlyList<StorageRow>)Program.Field(diskView, "_rows")!;
                     if (!rows.Select(row => row.Label).SequenceEqual(["C:", "D:", "E:", "F:"])) throw new InvalidOperationException("USB capacity rows are missing.");
+                    if (rows.First(row => row.Label == "D:").Celsius != 39 || rows.First(row => row.Label == "F:").Celsius != 41) throw new InvalidOperationException("USB temperatures are missing from the page.");
                 }
                 await SaveAiIsland($"{(usb ? "usb-storage" : "fan-page")}-{palette}-{width}x{height}");
                 Program.Call(view, "Update", [typeof(MonitorSnapshot), typeof(bool)], sample with { Fans = Reading<FanSample>.Unavailable("temporary") }, false);
@@ -911,7 +917,11 @@ internal sealed class Renderer(App app, string output, string language, string[]
         _settings.MonitorFans = false; Refresh(); await Settle();
         if (Program.Field(Program.Field(_deck, "_monitorView")!, "_fans") is not null) throw new InvalidOperationException("Fan visibility switch did not hide the page row.");
         Program.SetProperty(app, "Monitor", null);
-        if (usb) Console.WriteLine("Internal and USB capacity rows show C:, D:, E: and F:; all page sizes rendered in both themes.");
+        if (usb)
+        {
+            await SettingsPage("usb-temperature-settings", 9);
+            Console.WriteLine("Internal and USB rows show C:, D:, E: and F: with their temperatures; all page sizes rendered in both themes.");
+        }
         Console.WriteLine("Expanded fan rows fit all page sizes; both fan readings, missing telemetry and the visibility switch passed.");
     }
 

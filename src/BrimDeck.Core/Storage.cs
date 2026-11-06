@@ -13,7 +13,7 @@ public sealed record StorageVolume(string Letter, string Label, ulong Total, ulo
 
 // A physical drive and its lettered volumes, in letter order. Number is the drive's number (\\.\PhysicalDriveN), or -1 for a volume
 // that spans drives or whose drive is unknown; Model is the drive's model. The temperature belongs to the drive, not to a volume.
-// SolidState: a solid-state drive, the only kind asked for a temperature.
+// SolidState: a solid-state drive. USB disks can also report a temperature through their bridge.
 public sealed record StorageDrive(int Number, string Model, IReadOnlyList<StorageVolume> Volumes)
 {
     public bool External { get; init; }
@@ -57,7 +57,7 @@ public static class Storage
     // A drive behind a RAID controller is never asked for its temperature: the controller's driver answers for it, and Intel Rapid
     // Storage Technology on one laptop never answered at all, which froze the whole machine. Windows' own settings show no
     // temperature for such a drive either. Its space is listed as any other drive's.
-    public static bool AsksTemperature(StorageDisk disk) => Internal(disk) && disk.Bus != BusRaid;
+    public static bool AsksTemperature(StorageDisk disk) => disk.Bus != BusRaid && (Internal(disk) || disk.Bus == BusUsb);
 
     // The drives from the volumes and the physical drive each lies on (null when it spans drives or its drive is unknown), the
     // drives Windows describes, the temperatures by drive number and the solid-state drives' numbers. A volume on a drive that is
@@ -72,7 +72,7 @@ public static class Storage
         var drives = kept.Where(item => item.Disk is not null).GroupBy(item => item.Disk!.Value)
             .Select(group => new StorageDrive(group.Key, disks[group.Key].Model, group.Select(item => item.Volume).OrderBy(Letter).ToList())
             {
-                Temperature = !External(disks[group.Key]) && temperatures is not null && temperatures.TryGetValue(group.Key, out var heat) ? heat : null,
+                Temperature = temperatures is not null && temperatures.TryGetValue(group.Key, out var heat) ? heat : null,
                 SolidState = !External(disks[group.Key]) && solid?.Contains(group.Key) == true,
                 External = External(disks[group.Key])
             })

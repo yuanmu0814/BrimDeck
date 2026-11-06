@@ -14,6 +14,8 @@
     <Compile Include="..\..\src\BrimDeck\Native\TemperatureSensors.cs" Link="TemperatureSensors.cs" />
     <Compile Include="..\..\src\BrimDeck\Native\PowerSensors.cs" Link="PowerSensors.cs" />
     <Compile Include="..\..\src\BrimDeck\Native\StorageReader.cs" Link="StorageReader.cs" />
+    <Compile Include="..\..\src\BrimDeck\Native\UsbDiskTemperature.cs" Link="UsbDiskTemperature.cs" />
+    <Compile Include="..\..\src\BrimDeck\Native\UsbTemperatureAccess.cs" Link="UsbTemperatureAccess.cs" />
     <Compile Include="..\..\src\BrimDeck\Native\SensorGuard.cs" Link="SensorGuard.cs" />
     <Compile Include="..\..\src\BrimDeck\Native\ClevoFans.cs" Link="ClevoFans.cs" />
     <Compile Include="..\..\src\BrimDeck\Native\SettingsChrome.cs" Link="SettingsChrome.cs" />

@@ -14,10 +14,13 @@ internal static class Program
     {
         try
         {
+            if (args is [UsbTemperatureAccess.ElevatedSwitch, var pipe, var parent]) return UsbTemperatureAccess.RunHelperAsync(pipe, parent).GetAwaiter().GetResult();
             // "--only power": just the power and battery checks, for a quick look at what this machine reports.
             if (args is ["--only", "power"]) { PowerChecks.Run(Check); return Finish(); }
             if (args is ["--only", "fans"]) { FanChecks.Run(Check); return Finish(); }
             if (args is ["--only", "storage", ..]) { StorageChecks.Run(Check, args.Skip(2).ToArray()); return Finish(); }
+            if (args is ["--only", "storage-temperature", ..]) { StorageChecks.Temperatures(Check, args.Skip(2).ToArray()); return Finish(); }
+            if (args is ["--only", "usb-helper"]) { StorageChecks.Helper(Check); return Finish(); }
             if (args is ["--only", "gpu"]) { CheckGpus(); return Finish(); }
             if (args is ["--only", "capture"]) { CaptureChecks.Run(Check); return Finish(); }
             if (args is ["--only", "frames"]) { FrameRateChecks.Run(Check); return Finish(); }
