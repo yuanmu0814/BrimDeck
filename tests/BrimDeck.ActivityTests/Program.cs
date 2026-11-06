@@ -183,6 +183,42 @@ try
         Check("structural events also preserve rollout paths outside recent date folders", true);
     }
 
+    // Desktop's paginated/resumed logs append a writer UUID after the logical
+    // thread UUID. Neither that writer nor a copied ancestor is a new task.
+    string branchesHome = Path.Combine(root, "branches-codex");
+    string parentId = Guid.NewGuid().ToString("D"), branchId = Guid.NewGuid().ToString("D"), oldBranchId = Guid.NewGuid().ToString("D");
+    string writerId = Guid.NewGuid().ToString("D"), branchTurn = Guid.NewGuid().ToString("D"), oldBranchTurn = Guid.NewGuid().ToString("D");
+    string branchFile = Path.Combine(branchesHome, "sessions", DateTime.Now.ToString("yyyy/MM/dd"), $"rollout-2026-11-06T01-02-03-{branchId}_{writerId}.jsonl");
+    string oldBranchFile = Path.Combine(branchesHome, "sessions", DateTime.Now.AddMonths(-3).ToString("yyyy/MM/dd"), $"rollout-2026-08-06T01-02-03-{oldBranchId}_{Guid.NewGuid():D}.jsonl");
+    string BranchHeader(string id) => Row(new { type = "session_meta", timestamp = oldStamp, payload = new { id, session_id = id, source = "vscode", originator = "Codex Desktop", history_mode = "paginated", history_base = new { thread_id = parentId, end_ordinal_exclusive = 100, end_byte_offset = 1024 }, forked_from_id = parentId } });
+    Directory.CreateDirectory(Path.GetDirectoryName(branchFile)!); Directory.CreateDirectory(Path.GetDirectoryName(oldBranchFile)!);
+    string branchStart = DateTimeOffset.UtcNow.ToString("O");
+    await File.WriteAllTextAsync(branchFile, BranchHeader(branchId)
+        + Row(new { type = "session_meta", timestamp = oldStamp, payload = new { id = parentId, source = "cli" } })
+        + Row(new { type = "event_msg", timestamp = oldStamp, payload = new { type = "task_started", turn_id = Guid.NewGuid().ToString("D") } })
+        + Row(new { type = "turn_context", timestamp = branchStart, payload = new { thread_id = branchId, turn_id = branchTurn, model = "synthetic-model" } })
+        + Row(new { type = "event_msg", timestamp = branchStart, payload = new { type = "task_started", turn_id = branchTurn } }));
+    await File.WriteAllTextAsync(oldBranchFile, BranchHeader(oldBranchId));
+    File.SetLastWriteTimeUtc(oldBranchFile, DateTime.UtcNow.AddMonths(-3));
+    using (var branches = new PacerEngineClient())
+    {
+        var history = new ConcurrentQueue<AiActivitySnapshot>(); branches.Snapshot += history.Enqueue;
+        await branches.StartAsync(enginePath, "en-US", false, 60, codexHome: branchesHome, claudeHome: sources[1], deepseekHome: sources[2]);
+        await branches.SendAsync("setExpanded", new { expanded = true });
+        await Until(() => history.Any(snapshot => snapshot.Tasks.Any(task => task.SessionId == branchId && task.TurnId == branchTurn && task.Phase == "running")));
+        Check("paginated branch uses its logical ID rather than the writer suffix at cold start", !history.Any(snapshot => snapshot.Tasks.Any(task => task.SessionId == writerId || task.SessionId == parentId)));
+        await File.AppendAllTextAsync(oldBranchFile, Row(new { type = "event_msg", timestamp = DateTimeOffset.UtcNow.ToString("O"), payload = new { type = "task_started", turn_id = oldBranchTurn } }));
+        await Until(() => history.Any(snapshot => snapshot.RunningCount == 2 && snapshot.Tasks.Any(task => task.SessionId == oldBranchId && task.TurnId == oldBranchTurn)));
+        Check("old paginated branch is rediscovered and counted separately without refresh", history.Last().Presentation!.Rows.Count(row => row.Phase == "running" && row.Subagents == 0) == 2);
+        await File.AppendAllTextAsync(branchFile, Row(new { type = "response_item", timestamp = DateTimeOffset.UtcNow.ToString("O"), payload = new { type = "function_call", call_id = "synthetic-call", name = "exec_command", arguments = "synthetic-private-arguments" } }));
+        await Until(() => history.Any(snapshot => snapshot.Tasks.Any(task => task.SessionId == branchId && task.Stage == "tool")));
+        Check("branch tool status reaches the task presentation", history.Last().Presentation!.Rows.Any(row => row.Symbol == "terminal"));
+        await File.AppendAllTextAsync(branchFile, Row(new { type = "event_msg", timestamp = DateTimeOffset.UtcNow.ToString("O"), payload = new { type = "task_complete", turn_id = branchTurn } }));
+        await Until(() => history.Any(snapshot => snapshot.RunningCount == 1 && snapshot.Tasks.Any(task => task.SessionId == branchId && task.Unread && task.Phase == "completed")));
+        Check("branch completion does not stop its sibling or expose inherited task content", history.Last().Tasks.Any(task => task.SessionId == oldBranchId && task.Phase == "running")
+            && !history.Any(snapshot => JsonSerializer.Serialize(snapshot).Contains("synthetic-private-arguments", StringComparison.Ordinal)));
+    }
+
     string titlesHome = Path.Combine(root, "titles-codex");
     string[] titles = [" \t\n\u3000" + new string('汉', 250) + "🧑‍💻 \u3000", "\u2003🧑‍💻 Chat\u3000", " \t\n\u3000"];
     var indexed = new List<(string File, string Title)>();

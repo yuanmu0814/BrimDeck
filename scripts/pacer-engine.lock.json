@@ -4,5 +4,5 @@
   "protocolVersion": 1,
   "swiftVersion": "6.4.2",
   "patch": "pacer-engine.patch",
-  "patchSha256": "d27943ab0fa19c93f2e99aedbb9739d64aea88ff87c1f298d0acd470bb20013d"
+  "patchSha256": "c9f729ba5671427044324181b1fefbc7bb464f42a21c20b77838121cf1a63d29"
 }

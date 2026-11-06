@@ -97,8 +97,81 @@ index f88ddca..b9986ce 100644
      }
      public func stop() {
          queue.async { [self] in
+diff --git a/native/Sources/PacerCore/AgentProvider.swift b/native/Sources/PacerCore/AgentProvider.swift
+index f8f503b..1989e7a 100644
+--- a/native/Sources/PacerCore/AgentProvider.swift
++++ b/native/Sources/PacerCore/AgentProvider.swift
+@@ -29,6 +29,18 @@ public enum AgentProvider: String, CaseIterable, Codable, Sendable, Identifiable
+         if self != .codex {
+             return validatedSessionID(String(identity.split(separator: ":").last ?? ""))
+         }
++        // Desktop paginated/resumed rollouts are <thread UUID>_<writer UUID>.
++        // The writer identifies a physical log, not another conversation. Only
++        // recognize this suffix on rollout files; host-qualified keys retain
++        // their existing parsing (including dotted SSH aliases).
++        if identity.hasPrefix("rollout-"), identity.hasSuffix(".jsonl") {
++            let stem = String(identity.dropLast(6))
++            if let separator = stem.lastIndex(of: "_"),
++               UUID(uuidString: String(stem[stem.index(after: separator)...])) != nil,
++               let thread = UUID(uuidString: String(stem[..<separator].suffix(36))) {
++                return thread.uuidString.lowercased()
++            }
++        }
+         // Dotted SSH aliases must not be interpreted as a rollout extension.
+         return (UUID(uuidString: String(identity.suffix(36))) ??
+             UUID(uuidString: String((identity as NSString).deletingPathExtension.suffix(36))))?.uuidString.lowercased()
+diff --git a/native/Sources/PacerCore/CodexSessionOrigin.swift b/native/Sources/PacerCore/CodexSessionOrigin.swift
+index 5ce1cfa..c2e6876 100644
+--- a/native/Sources/PacerCore/CodexSessionOrigin.swift
++++ b/native/Sources/PacerCore/CodexSessionOrigin.swift
+@@ -127,6 +127,7 @@ public final class CodexOriginLookup {
+     private let home: URL
+     private var files: [URL] = []
+     private var scannedAt = Date.distantPast
++    private var searchedAt: [String: Date] = [:]
+     private var cache: [URL: (inode: UInt64, size: UInt64, modified: Date, value: CodexRolloutMetadata?)] = [:]
+     public init(home: URL) { self.home = home }
+     public func lookup(_ threadID: String) -> CodexRolloutMetadata? {
+@@ -147,9 +148,35 @@ public final class CodexOriginLookup {
+                 (url, (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+             }
+             files = dated.sorted { $0.1 == $1.1 ? $0.0.path < $1.0.path : $0.1 > $1.1 }.prefix(512).map(\.0)
+-            scannedAt = now; cache = cache.filter { files.contains($0.key) }
++            scannedAt = now; cache = cache.filter { files.contains($0.key) }; searchedAt.removeAll()
+         }
+-        guard let file = files.first(where: { $0.deletingPathExtension().lastPathComponent.lowercased().hasSuffix(threadID.lowercased()) }),
++        // A live old Desktop thread may not be in the bounded CLI index. Its
++        // UUIDv7 creation time locates the original date folder without a full
++        // history scan. Read only matching filenames, then verify metadata and
++        // writer ownership normally before granting a subscription.
++        let normalized = threadID.lowercased()
++        if !files.contains(where: { AgentProvider.codex.sessionID(in: $0.lastPathComponent) == normalized }),
++           searchedAt[normalized] == nil,
++           normalized.count == 36, normalized[normalized.index(normalized.startIndex, offsetBy: 14)] == "7",
++           let milliseconds = UInt64(normalized.replacingOccurrences(of: "-", with: "").prefix(12), radix: 16) {
++            if searchedAt.count < 512 { searchedAt[normalized] = now }
++            let created = Date(timeIntervalSince1970: Double(milliseconds) / 1000)
++            if created <= now.addingTimeInterval(86400) {
++                let formatter = DateFormatter(); formatter.dateFormat = "yyyy/MM/dd"; formatter.locale = Locale(identifier: "en_US_POSIX")
++                var matches: [URL] = []
++                for day in [created.addingTimeInterval(-86400), created, created.addingTimeInterval(86400)] {
++                    let directory = home.appendingPathComponent("sessions/" + formatter.string(from: day))
++                    matches += ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil,
++                        options: [.skipsHiddenFiles])) ?? []).filter { $0.pathExtension == "jsonl" && AgentProvider.codex.sessionID(in: $0.lastPathComponent) == normalized }
++                }
++                let recent = matches.sorted {
++                    ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
++                    ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
++                }.prefix(16)
++                files = Array((Array(recent) + files).prefix(512))
++            }
++        }
++        guard let file = files.first(where: { AgentProvider.codex.sessionID(in: $0.lastPathComponent) == normalized }),
+               let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+               let size = (attributes[.size] as? NSNumber)?.uint64Value, let modified = attributes[.modificationDate] as? Date else { return nil }
+         let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
 diff --git a/native/Sources/PacerCore/LocalActivityReader.swift b/native/Sources/PacerCore/LocalActivityReader.swift
-index a8ba61c..5813135 100644
+index a8ba61c..ee61515 100644
 --- a/native/Sources/PacerCore/LocalActivityReader.swift
 +++ b/native/Sources/PacerCore/LocalActivityReader.swift
 @@ -31,7 +31,8 @@ public actor LocalActivityReader {
@@ -126,7 +199,14 @@ index a8ba61c..5813135 100644
          for entry in indexed {
              let file = entry.url
              let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-@@ -100,7 +109,7 @@ public actor LocalActivityReader {
+@@ -95,12 +104,13 @@ public actor LocalActivityReader {
+         }
+         // Reviews must not consume the user-task discovery slots.
+         func covered(_ file: URL) -> Bool {
+-            excludingThreads.contains(String(file.deletingPathExtension().lastPathComponent.suffix(36)).lowercased())
++            guard let id = AgentProvider.codex.sessionID(in: file.lastPathComponent) else { return false }
++            return excludingThreads.contains(id)
+         }
          var selected = metricsOnly ? Array(cursors.keys) : cursors.filter {
              [.running, .waitingForInput].contains(projected($0.value).phase) && !covered($0.key)
          }.map(\.key)
@@ -135,7 +215,7 @@ index a8ba61c..5813135 100644
          metadata = metadata.filter { candidates.contains($0.key) }
          if !metricsOnly { for file in candidates {
              let facts = signature(file)
-@@ -131,6 +140,13 @@ public actor LocalActivityReader {
+@@ -131,6 +141,13 @@ public actor LocalActivityReader {
                  .map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
              ignoredIDs = Set(inherited.values.filter(\.isIgnoredCodexSession).map { $0.canonicalized().id })
              selected.removeAll { file in metadata[file].flatMap { inherited[$0.activity.id] }?.isIgnoredCodexSession == true }
@@ -149,6 +229,16 @@ index a8ba61c..5813135 100644
              for file in candidates {
                  guard selected.count < maxFiles else { break }
                  guard !covered(file), let value = metadata[file]?.activity, !value.isInternalReview,
+@@ -146,8 +163,7 @@ public actor LocalActivityReader {
+         }
+         if !metricsOnly { cursors = cursors.filter { selected.contains($0.key) || covered($0.key) } }
+         for file in selected {
+-            let id = String(file.deletingPathExtension().lastPathComponent.suffix(36)).lowercased()
+-            if excludingThreads.contains(id), !includeCoveredMetrics { continue }
++            if covered(file), !includeCoveredMetrics { continue }
+             guard let facts = signature(file) else {
+                 if let cursor = cursors.removeValue(forKey: file) {
+                     var activity = projected(cursor)
 diff --git a/native/Sources/PacerCore/RuntimeEventState.swift b/native/Sources/PacerCore/RuntimeEventState.swift
 index cb70a1e..c23669a 100644
 --- a/native/Sources/PacerCore/RuntimeEventState.swift
@@ -162,6 +252,39 @@ index cb70a1e..c23669a 100644
              if (method == "metadata" && hasName) ||
                  (method == "thread/name/updated" && (event["name"] is String || event["name"] is NSNull)),
                 let update = SessionNameUpdate(value) {
+diff --git a/native/Tests/PacerCoreTests/CodexSessionOriginTests.swift b/native/Tests/PacerCoreTests/CodexSessionOriginTests.swift
+index 81b4e1d..c6225fd 100644
+--- a/native/Tests/PacerCoreTests/CodexSessionOriginTests.swift
++++ b/native/Tests/PacerCoreTests/CodexSessionOriginTests.swift
+@@ -169,6 +169,28 @@ final class CodexSessionOriginTests: XCTestCase {
+         XCTAssertFalse(sent.values.contains { $0["method"] as? String == "thread-stream-following-changed" })
+     }
+ 
++    func testOldUnindexedPaginatedRolloutPreflightUsesThreadNotWriter() throws {
++        let root = try directory(), format = DateFormatter(); format.dateFormat = "yyyy/MM/dd"
++        let milliseconds = try XCTUnwrap(UInt64(session.replacingOccurrences(of: "-", with: "").prefix(12), radix: 16))
++        let created = Date(timeIntervalSince1970: Double(milliseconds) / 1000)
++        let folder = root.appendingPathComponent("sessions/" + format.string(from: created))
++        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
++        let writer = "019a0000-0000-7000-8000-0000000000f1"
++        let file = folder.appendingPathComponent("rollout-2025-01-01T00-00-00-" + session + "_" + writer + ".jsonl")
++        try metadata(session, origin: "Codex Desktop").write(to: file)
++        let lookup = CodexOriginLookup(home: root)
++        XCTAssertEqual(try XCTUnwrap(lookup.lookup(session)).url, file)
++        XCTAssertNil(lookup.lookup(writer), "A physical writer UUID must not authorize a different thread")
++        var activity = SessionActivity(id: file.lastPathComponent)
++        activity.consume(try metadata(session, origin: "Codex Desktop"))
++        XCTAssertEqual(activity.threadID, session)
++        XCTAssertEqual(activity.canonicalized().id, "local:" + session)
++        XCTAssertEqual(AgentProvider.codex.sessionID(in: "host.example:" + writer), writer)
++        // A mismatched ancestor header still cannot rename this cursor.
++        activity.consume(try metadata(child, origin: "codex-tui"))
++        XCTAssertEqual(activity.threadID, session)
++    }
++
+     private func directory() throws -> URL {
+         let root = FileManager.default.temporaryDirectory.appendingPathComponent("pacer-origin-" + UUID().uuidString)
+         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 diff --git a/windows/EngineSupport/PacerEngine.swift b/windows/EngineSupport/PacerEngine.swift
 index 42f0a7a..9daee12 100644
 --- a/windows/EngineSupport/PacerEngine.swift

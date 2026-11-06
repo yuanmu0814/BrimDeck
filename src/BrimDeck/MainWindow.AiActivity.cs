@@ -13,6 +13,8 @@ public partial class MainWindow
     private TextBlock? _aiTabCount;
     private TextBlock? _aiSummary;
     private FrameworkElement? _activityBadge;
+    private AiStatusIcon? _compactActivityIcon;
+    private bool _activityCompactActive;
     private ScrollViewer? _aiScroll;
     private double _aiScrollOffset;
     private string _activityCompactText = "";
@@ -24,7 +26,10 @@ public partial class MainWindow
         if (_aiSummary is not null) _aiSummary.Text = AiActivity.Compact(_app.Activity, Loc.IsEnglish);
         if (_activityBadge is not null) _activityBadge.ToolTip = ActivityHelp;
         string compact = AiActivity.Compact(_app.Activity, Loc.Language == "en-US");
-        if (compact != _activityCompactText) { _activityCompactText = compact; if (!_expanded) RenderCompact(); }
+        bool active = HasActiveActivity;
+        if (compact != _activityCompactText || active != _activityCompactActive)
+        { _activityCompactText = compact; _activityCompactActive = active; if (!_expanded) RenderCompact(); }
+        else if (_compactActivityIcon is not null) UpdateActivityIcon(_compactActivityIcon);
         if (_expanded && IsUsagePage && _aiTasksPage) RenderUsage();
     }
 
@@ -166,7 +171,11 @@ public partial class MainWindow
         string? source = string.IsNullOrWhiteSpace(row.SourceLabel) ? row.Source : row.SourceLabel;
         string details = string.Join(" · ", new[] { row.Model, row.Effort, source, row.Subagents > 0 ? row.SubagentText ?? $"+{row.Subagents}" : null }.Where(value => !string.IsNullOrWhiteSpace(value)));
         var detail = UI.Fixed(details, 10.5, 18, UI.Secondary); detail.TextTrimming = TextTrimming.CharacterEllipsis; text.Children.Add(detail);
-        var state = UI.Fixed(row.Status, 11, 18, color); state.TextTrimming = TextTrimming.CharacterEllipsis; text.Children.Add(state);
+        var stateLine = new DockPanel { LastChildFill = true };
+        var symbol = new AiStatusIcon(16) { Margin = new Thickness(0, 0, 5, 0) };
+        symbol.Update(row.Symbol, row.Phase == "running" ? new Dictionary<string, int> { [row.Provider] = 1 } : new Dictionary<string, int>(), UI.Brush(color), Settings.Animations && SystemParameters.ClientAreaAnimation);
+        stateLine.Children.Add(symbol);
+        var state = UI.Fixed(row.Status, 11, 18, color); state.TextTrimming = TextTrimming.CharacterEllipsis; stateLine.Children.Add(state); text.Children.Add(stateLine);
         var stats = new StackPanel { MinWidth = 85, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(12, 0, 0, 0) };
         string rate = row.RateIsFresh && row.TokensPerSecond is > 0 and < 1_000_000 ? (row.RateText ?? $"{row.TokensPerSecond:0.#}") + " t/s" : row.RatePlaceholder ?? "— t/s";
         stats.Children.Add(UI.Fixed(rate, 12, 20, UI.Primary, FontWeights.SemiBold));
@@ -209,6 +218,32 @@ public partial class MainWindow
 
     private static string ActivityColor(string provider) => UI.ColorFor(provider switch { "claude" => ProviderId.Claude, "deepseek" => ProviderId.DeepSeek, _ => ProviderId.Codex });
 
+    private bool HasActiveActivity => Settings.AiActivityEnabled && (_app.Activity.RunningCount > 0 || _app.Activity.WaitingCount > 0 || _app.Activity.Requests.Count > 0);
+
+    private AiStatusIcon? CompactActivityIcon(double scale)
+    {
+        if (!Settings.ShowsSummary(EffectiveStyle) || !HasActiveActivity) return null;
+        var icon = new AiStatusIcon(Math.Round(16 * scale));
+        UpdateActivityIcon(icon); _compactActivityIcon = icon;
+        return icon;
+    }
+
+    private void UpdateActivityIcon(AiStatusIcon icon)
+    {
+        var value = _app.Activity;
+        var header = value.Presentation?.Header;
+        var rows = value.Presentation?.Rows ?? [];
+        bool attention = value.WaitingCount > 0 || value.Requests.Count > 0;
+        // Multiple tasks keep their count in the adjacent text; show the most
+        // recent active stage here instead of replacing the glyph with a count.
+        string symbol = attention ? rows.FirstOrDefault(row => row.Attention is not null || row.Phase == "waitingForInput")?.Symbol ?? "hand.raised"
+            : header?.CoreSymbol ?? rows.FirstOrDefault(row => row.Phase == "running")?.Symbol ?? "sparkle";
+        var orbit = header?.Orbit ?? value.Tasks.Where(t => t.Phase == "running").GroupBy(t => t.Provider).ToDictionary(g => g.Key, g => g.Count());
+        icon.Update(symbol, orbit, UI.Brush(attention ? PanelTheme.AppWarning(new AppEntry()) : UI.Primary), Settings.Animations && SystemParameters.ClientAreaAnimation);
+        icon.ToolTip = ActivityHelp;
+        AutomationProperties.SetName(icon, Loc.T("AI 任务状态：", "AI task status: ") + symbol);
+    }
+
     private FrameworkElement? CompactActivity(double scale, bool concise = false)
     {
         _activityBadge = null;
@@ -222,9 +257,9 @@ public partial class MainWindow
             : _app.Activity.WaitingCount > 0 || _app.Activity.Requests.Count > 0 ? PanelTheme.AppWarning(new AppEntry()) : UI.Accent;
         var label = UI.Fixed(text, 10 * scale, 16 * scale, color, FontWeights.SemiBold);
         label.TextTrimming = TextTrimming.CharacterEllipsis;
-        var content = new Border { Child = label, Padding = new Thickness(4 * scale, 0, 4 * scale, 0), CornerRadius = new CornerRadius(4 * scale), Background = UI.Brush(UI.Fill) };
+        var content = new Border { Child = label };
         content.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-        content.Width = Math.Ceiling(Math.Max((concise ? 20 : 70) * scale, content.DesiredSize.Width)); content.Height = Math.Ceiling(content.DesiredSize.Height);
+        content.Width = Math.Ceiling(content.DesiredSize.Width); content.Height = Math.Ceiling(content.DesiredSize.Height);
         content.ToolTip = ActivityHelp; _activityBadge = content;
         AutomationProperties.SetName(content, Loc.T("AI 任务：", "AI tasks: ") + text);
         return content;

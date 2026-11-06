@@ -150,6 +150,15 @@ internal sealed class Renderer(App app, string output, string language, string[]
     private async Task AiActivityScenes()
     {
         var activity = AiActivitySnapshot.Parse(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "ai-activity-fixture.json")));
+        AiActivitySnapshot Stage(string symbol) => activity with
+        {
+            RunningCount = 1, WaitingCount = 0, Requests = [], RateIsFresh = true, TotalTokensPerSecond = 42,
+            Presentation = activity.Presentation! with
+            {
+                Rows = [activity.Presentation!.Rows.First(row => row.Phase == "running") with { Symbol = symbol, Unread = false, Failed = false, Attention = null }],
+                Header = activity.Presentation.Header with { ActiveCount = 1, CoreSymbol = symbol, Orbit = new Dictionary<string, int> { ["codex"] = 1 }, Attention = null, Ending = null }
+            }
+        };
         Program.SetProperty(app, "Activity", activity); Program.SetProperty(app, "ActivityState", "ready");
         _settings.Animations = false; _settings.Style = CompactStyle.Capsule; _settings.PanelScale = 100;
         _settings.CapsuleAutoWidth = true; _settings.CapsuleHeight = 32;
@@ -193,7 +202,9 @@ internal sealed class Renderer(App app, string output, string language, string[]
                 _deck.SetExpanded(false, true); await Settle();
                 foreach (var (name, value) in new[]
                 {
-                    ("running", activity with { RunningCount = 3, WaitingCount = 0, Requests = [], RateIsFresh = true, TotalTokensPerSecond = 42 }),
+                    ("running", Stage("sparkle")),
+                    ("tool", Stage("terminal")),
+                    ("reply", Stage("text.bubble")),
                     ("waiting", activity with { RunningCount = 2, WaitingCount = 1 }),
                     ("idle", AiActivitySnapshot.Empty)
                 })
@@ -204,6 +215,14 @@ internal sealed class Renderer(App app, string output, string language, string[]
                     var row = panel.Children.OfType<System.Windows.Controls.Grid>().First();
                     if (name != "idle" && row.Children.OfType<FrameworkElement>().LastOrDefault() is not { } badge)
                         throw new InvalidOperationException("Missing compact activity badge.");
+                    var icon = Program.Field(_deck, "_compactActivityIcon");
+                    if (name == "idle" ? icon is not null || Program.Field(_deck, "_quotaCarousel") is null : icon is null || Program.Field(_deck, "_quotaCarousel") is not null)
+                        throw new InvalidOperationException("Activity must replace the quota ring only while active.");
+                    if (icon is not null && (bool)icon.GetType().GetProperty("HasMotion", Program.Any)!.GetValue(icon)!)
+                        throw new InvalidOperationException("Motion remained active with animations disabled.");
+                    if (Program.Field(_deck, "_activityBadge") is System.Windows.Controls.Border textBadge
+                        && (textBadge.Background is not null || textBadge.Padding.Right != 0 || textBadge.Width - textBadge.Child.DesiredSize.Width > 1))
+                        throw new InvalidOperationException("Compact activity regained its fill or reserved trailing space.");
                 }
                 Program.SetProperty(app, "Activity", activity);
             }
@@ -214,7 +233,32 @@ internal sealed class Renderer(App app, string output, string language, string[]
             _settings.NotchEdge = edge; Refresh(); _deck.SetExpanded(false, true); await Settle();
             await Save($"ai-column-{edge}", 1);
         }
+        // Exercise actual Loaded/Visible/Unloaded clocks independently of the
+        // off-screen stills. Only invented data is ever attached to this host.
+        _settings.Style = CompactStyle.Capsule; _settings.NotchEdge = ScreenEdge.Top;
+        _settings.PanelTheme = PanelThemes.Light; _settings.Animations = true;
+        Program.SetProperty(app, "Activity", Stage("sparkle")); Refresh(); _deck.SetExpanded(false, true);
+        Program.Call(_deck, "ActivityChanged", []);
+        Program.SetProperty(app, "WindowDrags", Activator.CreateInstance(Type.GetType("BrimDeck.Native.WindowDrags, BrimDeck")!, true));
+        _deck.Show(); await Settle();
+        var moving = Program.Field(_deck, "_compactActivityIcon")!;
+        bool Motion(object icon) => (bool)icon.GetType().GetProperty("HasMotion", Program.Any)!.GetValue(icon)!;
+        if (SystemParameters.ClientAreaAnimation && !Motion(moving)) throw new InvalidOperationException("Visible active icon did not animate.");
+        // Also exercise the clock driver on machines whose Windows preference
+        // disables motion; this override affects this synthetic control only.
+        if (!SystemParameters.ClientAreaAnimation)
+            Program.Call(moving, "Update", [typeof(string), typeof(IReadOnlyDictionary<string, int>), typeof(Brush), typeof(bool)], "sparkle", new Dictionary<string, int> { ["codex"] = 1 }, Brushes.Black, true);
+        if (!Motion(moving)) throw new InvalidOperationException("The active icon's animation clock did not start.");
+        Program.SetProperty(app, "Activity", Stage("terminal")); Program.Call(_deck, "ActivityChanged", []); await Settle();
+        if (!ReferenceEquals(moving, Program.Field(_deck, "_compactActivityIcon")) || (string)moving.GetType().GetProperty("Symbol", Program.Any)!.GetValue(moving)! != "terminal")
+            throw new InvalidOperationException("A stage change with identical count and throughput did not update the existing icon.");
+        _deck.Hide(); await Settle();
+        if (Motion(moving)) throw new InvalidOperationException("Hidden activity icon retained its clock.");
+        Program.SetProperty(app, "Activity", AiActivitySnapshot.Empty); Refresh(); await Settle();
+        if (Motion(moving) || Program.Field(_deck, "_compactActivityIcon") is not null || Program.Field(_deck, "_quotaCarousel") is null)
+            throw new InvalidOperationException("Ending activity did not release motion and restore quotas.");
         Console.WriteLine("PASS: AI task filters, quota page and compact states at both scales and themes.");
+        Console.WriteLine("PASS: Activity icon transitions, reduced motion, hide/unload cleanup and idle quota restoration.");
     }
 
     private async Task SaveAiIsland(string name)

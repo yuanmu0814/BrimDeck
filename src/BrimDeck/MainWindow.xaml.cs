@@ -553,7 +553,7 @@ public partial class MainWindow : Window
     internal void RenderCompact()
     {
         var fade = RowFadeStart();
-        CompactRings.Children.Clear(); CompactAlert.Children.Clear();
+        CompactRings.Children.Clear(); CompactAlert.Children.Clear(); _compactActivityIcon = null; _activityBadge = null;
         CompactRings.HorizontalAlignment = HorizontalAlignment.Center;
         if (_quotaCarousel is not null) { _quotaElapsed = _quotaCarousel.Elapsed; _quotaCarousel.SetRunning(false, false); }
         if (_stripCarousel is not null) { _stripElapsed = _stripCarousel.Elapsed; _stripCarousel.SetRunning(false, false); }

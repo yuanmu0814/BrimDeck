@@ -45,6 +45,7 @@ public partial class MainWindow
             }
         }
         var apps = Settings.ShowsSummary(EffectiveStyle) && !notice ? Settings.EnabledApps : [];
+        var activityIcon = notice ? null : CompactActivityIcon(scale);
         var clock = Settings.ShowsClock(EffectiveStyle) ? new ClockFace(Settings.ClockStyle, Settings.Clock24Hour, Settings.ClockSeconds, ClockFace.Palette(Settings, CoverColor), DateTime.Now, scale) : null;
         var layout = CompactMusicLayout.Calculate(10000, scale, media, apps.Count, text.Length > 0, clock?.ReservedWidth ?? 0, 0, equalizer, Settings.EqualizerBars); CurrentCompactLayout = layout;
         // One strip per reading, each alone on its line and centred in it. The drives show no glyph here: each drive has a line with its
@@ -92,6 +93,8 @@ public partial class MainWindow
         {
             switch (part)
             {
+                case CompactPart.Rings when activityIcon is not null:
+                    Add(activityIcon, activityIcon.Height); break;
                 case CompactPart.Rings when apps.Count > 0:
                     Add(ColumnRings(apps, layout, ringGap, column, out double ringsHeight), ringsHeight); break;
                 case CompactPart.Music when text.Length > 0:
@@ -127,7 +130,7 @@ public partial class MainWindow
         // The column's width and length for the shape (CollapsedGeometry.Resolve): the widest fixed part, the readings up to the cap,
         // and every line with the gaps; the surface never shortens below its tallest line. Like the row, the track notice is left out.
         var stack = CompactColumn.Stack([.. lines.Select(line => line.Height)], gap);
-        double wantedColumn = CompactColumn.Width(scale, [layout.CoverSize * (cover ? 1 : 0), equalizer ? layout.EqualizerSize : 0, clock?.ReservedWidth ?? 0, apps.Count > 0 ? layout.RingSize : 0],
+        double wantedColumn = CompactColumn.Width(scale, [layout.CoverSize * (cover ? 1 : 0), equalizer ? layout.EqualizerSize : 0, clock?.ReservedWidth ?? 0, activityIcon?.Width ?? (apps.Count > 0 ? layout.RingSize : 0)],
             strips.Select(strip => strip.PreferredWidth));
         double wanted = notice ? (double.IsNaN(_compactWanted) ? stack.Length : _compactWanted) : DevicePixels.Up(stack.Length, dpi);
         double required = lines.Count == 0 ? 0 : Math.Ceiling(lines.Max(line => line.Height));
