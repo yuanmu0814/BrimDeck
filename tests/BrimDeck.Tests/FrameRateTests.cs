@@ -42,7 +42,7 @@ static class FrameRateTests
     private static void Table(Action<string, bool> check)
     {
         var table = CompactMonitor.Normalize(null);
-        check("Frame rate: last in the table, hidden", table[^1].Item == Frames && !table[^1].Visible);
+        check("Frame rate: precedes fans in the table, hidden", table[^2].Item == Frames && !table[^2].Visible && table[^1].Item == CompactMonitorItems.Fans);
 
         var full = CompactMonitor.Normalize(null);
         full.First(reading => reading.Item == Frames).Figures = [];

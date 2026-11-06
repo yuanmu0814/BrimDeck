@@ -46,14 +46,14 @@ public sealed class StripPresence
 // stays (a figure missing for a moment shows a dash) until its sensor is known to be missing.
 public sealed class StripAdmission
 {
-    public const CompactMonitorItems Later = CompactMonitorItems.Storage | CompactMonitorItems.Power | CompactMonitorItems.Charge | CompactMonitorItems.Frames;
+    public const CompactMonitorItems Later = CompactMonitorItems.Storage | CompactMonitorItems.Power | CompactMonitorItems.Charge | CompactMonitorItems.Frames | CompactMonitorItems.Fans;
     // A part: a ring's temperature (Heat), a letter's space ("C:"), or a letter's temperature ("C:" + Heat).
     public const string Heat = "°";
     private readonly HashSet<(CompactMonitorItems Item, string Part)> _seen = [], _showing = [];
     // The machine's power draw and its own battery have given a reading, and the sampler has not since found it has none (a battery
     // reading is the machine's own and a desktop never shows one; the power reading stays away on a machine with no source). The frame
     // rate likewise: seen once counted, gone where Windows' frame events cannot be read.
-    private bool _powerSeen, _chargeSeen, _framesSeen;
+    private bool _powerSeen, _chargeSeen, _framesSeen, _fansSeen;
     // The readings left out of the row as it was last built; the drives until their first figures.
     public CompactMonitorItems Hidden { get; private set; } = Later;
     // The parts showing, as text: when it changes, the row is built again for the new widths.
@@ -96,6 +96,7 @@ public sealed class StripAdmission
         if ((pending & CompactMonitorItems.Power) != 0 && states.Power != SensorState.None) return true;
         if ((pending & CompactMonitorItems.Charge) != 0 && states.Charge != SensorState.None) return true;
         if ((pending & CompactMonitorItems.Frames) != 0 && states.Frames != SensorState.None) return true;
+        if ((pending & CompactMonitorItems.Fans) != 0 && states.Fans != SensorState.None) return true;
         if ((pending & CompactMonitorItems.Storage) == 0) return false;
         return Wanted(readings.Where(reading => reading.Item == CompactMonitorItems.Storage), latest, states).Any(part => !part.Missing);
     }
@@ -118,11 +119,13 @@ public sealed class StripAdmission
         if (latest?.Power.HasValue == true || states.Power == SensorState.Found) _powerSeen = true; else if (states.Power == SensorState.None) _powerSeen = false;
         if (latest?.Battery.HasValue == true || states.Charge == SensorState.Found) _chargeSeen = true; else if (states.Charge == SensorState.None) _chargeSeen = false;
         if (latest?.Frames.HasValue == true) _framesSeen = true; else if (states.Frames == SensorState.None) _framesSeen = false;
+        if (latest?.Fans.HasValue == true) _fansSeen = true; else if (states.Fans == SensorState.None) _fansSeen = false;
         // Only for readings the row chooses: one it does not show must not rebuild the row when its first figure comes.
         var chosen = CompactMonitor.Shown(readings);
         if (_powerSeen && (chosen & CompactMonitorItems.Power) != 0) { hidden &= ~CompactMonitorItems.Power; layout.Append((int)CompactMonitorItems.Power).Append(' '); }
         if (_chargeSeen && (chosen & CompactMonitorItems.Charge) != 0) { hidden &= ~CompactMonitorItems.Charge; layout.Append((int)CompactMonitorItems.Charge).Append(' '); }
         if (_framesSeen && (chosen & CompactMonitorItems.Frames) != 0) { hidden &= ~CompactMonitorItems.Frames; layout.Append((int)CompactMonitorItems.Frames).Append(' '); }
+        if (_fansSeen && (chosen & CompactMonitorItems.Fans) != 0) { hidden &= ~CompactMonitorItems.Fans; layout.Append((int)CompactMonitorItems.Fans).Append(' '); }
         var arriving = Hidden & ~hidden;
         Hidden = hidden;
         Layout = layout.ToString();

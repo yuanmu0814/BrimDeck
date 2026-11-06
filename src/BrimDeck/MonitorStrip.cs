@@ -48,6 +48,8 @@ internal sealed class MonitorStrip : FrameworkElement
     private readonly bool[] _letterUsage, _letterHeat;
     // Whether the frame rate shows its program's icon in place of the glyph (CompactFrames).
     private readonly bool _framesIcon;
+    private readonly bool _fanRpm;
+    private Rect _fanBounds = Rect.Empty;
 
     // unavailable: readings left out (StripAdmission.Hidden): the drives until their first figures, and for good on a machine
     // without them, so the row never shows a dash for them. admission: which temperatures and letters have given their first
@@ -82,9 +84,10 @@ internal sealed class MonitorStrip : FrameworkElement
         if (_letters.Length == 0) unavailable |= CompactMonitorItems.Storage;
         var frames = readings.FirstOrDefault(reading => reading.Item == CompactMonitorItems.Frames) ?? new CompactReading { Item = CompactMonitorItems.Frames };
         _framesIcon = CompactFrames.Shows(frames, CompactFrames.Icon);
+        _fanRpm = readings.FirstOrDefault(reading => reading.Item == CompactMonitorItems.Fans) is { } fans && CompactFans.ShowsRpm(fans);
         _shown = CompactMonitor.Shown(readings) & ~unavailable;
         // A ring set to show only its temperature, on a machine that has none, shows its dial alone.
-        _values = CompactMonitor.Values(readings) & (_usage | _heat);
+        _values = CompactMonitor.Values(readings) & (_usage | _heat | CompactMonitorItems.Fans);
         _scale = CompactMusicLayout.SafeScale(scale);
         _font = Math.Max(1, CompactMusicLayout.Half(11.5 * _scale));
         // Two figures stack in smaller type, so both fit the row's height.
@@ -95,7 +98,13 @@ internal sealed class MonitorStrip : FrameworkElement
         _gap = CompactMusicLayout.Whole((CompactMonitor.RingsOnly(_shown, _values) ? 7 : 6) * _scale);
         _row = Math.Max(1, CompactMusicLayout.Whole(24 * _scale));
         Height = _row;
-        IsHitTestVisible = false;
+        IsHitTestVisible = (_shown & CompactMonitorItems.Fans) != 0;
+        ToolTip = " ";
+        ToolTipOpening += (_, e) =>
+        {
+            if (!_fanBounds.Contains(System.Windows.Input.Mouse.GetPosition(this)) || _snapshot?.Fans.OrDefault is not { } sample) { e.Handled = true; return; }
+            ToolTip = FanSpeeds.Details(sample);
+        };
         // A reading fading out of a narrow row stays within it, off the lyric or the rings beside it.
         ClipToBounds = true;
         // Fixed per item, from the widest figure each can show, so the row's layout never moves with the readings. A rate has
@@ -121,7 +130,8 @@ internal sealed class MonitorStrip : FrameworkElement
         return usage ? FigureWidth(WidestPercent) : heat ? FigureWidth(WidestDegrees) : 0;
     }
     private double InlineGap => Math.Round(3 * _scale);
-    private double RingFigure(CompactMonitorItems item) => Math.Round(4 * _scale) + Column(item, (_usage & item) != 0, (_heat & item) != 0);
+    private double RingFigure(CompactMonitorItems item) => Math.Round(4 * _scale) + (item == CompactMonitorItems.Fans
+        ? FigureWidth(_fanRpm ? "88888 RPM" : WidestPercent) : Column(item, (_usage & item) != 0, (_heat & item) != 0));
 
     // The drives: a glyph, then each letter, its tag (if any) and its figures.
     private double Glyph => Math.Round(11 * _scale);
@@ -168,7 +178,7 @@ internal sealed class MonitorStrip : FrameworkElement
         InvalidateVisual();
         if (!ValuesMoving(Eased.Now)) _easing.Stop();
     }
-    private Smooth _cpu, _memory, _gpu;
+    private Smooth _cpu, _memory, _gpu, _fan;
 
     // The gap between two readings.
     public double Gap => _gap;
@@ -208,13 +218,14 @@ internal sealed class MonitorStrip : FrameworkElement
         if ((Shown & CompactMonitorItems.Cpu) != 0) moving |= _cpu.Set(cpu?.Usage, motion, now);
         if ((Shown & CompactMonitorItems.Memory) != 0) moving |= _memory.Set(s?.Memory.OrDefault?.UsedFraction, motion, now);
         if ((Shown & CompactMonitorItems.Gpu) != 0) moving |= _gpu.Set(s?.Gpu.OrDefault is { NoReadings: false } gpu ? gpu.Usage : null, motion, now);
+        if ((Shown & CompactMonitorItems.Fans) != 0) moving |= _fan.Set(s?.Fans.OrDefault?.Fraction, motion, now);
         if (moving && !_easing.IsEnabled) _easing.Start();
         InvalidateVisual();
     }
     private bool ValuesMoving(double now)
     {
         for (int i = 0; i < _cores.Length; i++) if (_cores[i].Moving(now)) return true;
-        return _cpu.Moving(now) || _memory.Moving(now) || _gpu.Moving(now);
+        return _cpu.Moving(now) || _memory.Moving(now) || _gpu.Moving(now) || _fan.Moving(now);
     }
 
     private double FigureWidth(string figure) => Math.Ceiling(MonitorDraw.Text(figure, _font, UI.Primary, 1).WidthIncludingTrailingWhitespace);
@@ -243,6 +254,7 @@ internal sealed class MonitorStrip : FrameworkElement
 
     protected override void OnRender(DrawingContext drawing)
     {
+        _fanBounds = Rect.Empty;
         double w = ActualWidth, ppd = MonitorDraw.PixelsPerDip(this), center = _row / 2, now = Eased.Now;
         // Each reading takes its width and the gap after it in proportion to how present it is, so the row closes up smoothly.
         _now = now;
@@ -281,10 +293,16 @@ internal sealed class MonitorStrip : FrameworkElement
                 case CompactMonitorItems.Power: Power(drawing, left, center, s?.Power.OrDefault, ppd); break;
                 case CompactMonitorItems.Charge: Charge(drawing, left, center, s?.Battery.OrDefault, level, ppd); break;
                 case CompactMonitorItems.Frames: Frames(drawing, left, center, FrameOf(s), color, ppd); break;
+                case CompactMonitorItems.Fans:
+                    _fanBounds = new Rect(left, 0, width, ActualHeight);
+                    Fans(drawing, left, center, s?.Fans.OrDefault, _fan.At(now), color, ppd); break;
             }
             if (partial) { drawing.Pop(); drawing.Pop(); drawing.Pop(); }
         }
     }
+
+    protected override HitTestResult? HitTestCore(PointHitTestParameters parameters) =>
+        _fanBounds.Contains(parameters.HitPoint) ? new PointHitTestResult(this, parameters.HitPoint) : null;
 
     // The cores as thin columns, fastest kind first, in their colors; their tops show the load at a glance, and a busy core
     // takes the warning or critical color by its own load.
@@ -321,6 +339,14 @@ internal sealed class MonitorStrip : FrameworkElement
         if ((_values & item) == 0) return;
         var heat = (_heat & item) != 0 ? CompactFigures.Heat(item, s) : null;
         Figures(drawing, x + _dial + Math.Round(4 * _scale), center, item, (_usage & item) != 0 ? (share, level) : null, (_heat & item) != 0, heat, ppd);
+    }
+
+    private void Fans(DrawingContext drawing, double x, double center, FanSample? sample, double? dial, string color, double ppd)
+    {
+        MonitorDraw.Dial(drawing, new Point(x + _dial / 2, center), _dial, Math.Max(1.2, CompactMusicLayout.Half(2 * _scale)), Math.Max(1, 7 * _scale), dial, color, "F", ppd);
+        if ((_values & CompactMonitorItems.Fans) == 0) return;
+        string figure = _fanRpm ? sample is null ? "—" : FanSpeeds.Rpm(sample.Rpm) : GaugeFigure(sample?.Fraction);
+        MonitorDraw.Baseline(drawing, MonitorDraw.Text(figure, _font, UI.Primary, ppd), x + _dial + Math.Round(4 * _scale), Math.Round(center + _font * .36));
     }
 
     // The share in use and the temperature at x: one in the row's type, or both stacked in the smaller type, the share above, or
@@ -467,6 +493,7 @@ internal sealed class MonitorStrip : FrameworkElement
                 case CompactMonitorItems.Power when s?.Power.OrDefault is { } power:
                     parts.Add(Loc.T("整机功耗 ", "System power ") + PowerText.Watts(power.Watts) + Loc.T("，", ", ") + (power.Estimated ? Loc.T("估算", "estimated") : Loc.T("实测", "measured"))); break;
                 case CompactMonitorItems.Frames when FrameOf(s) is { } frames: parts.Add(Loc.T("帧率 ", "Frame rate ") + FramesFigure(frames.PerSecond) + " FPS" + Loc.T("，", ", ") + frames.Program); break;
+                case CompactMonitorItems.Fans when s?.Fans.OrDefault is { } fans: parts.Add(Loc.T("风扇 ", "Fans ") + FanSpeeds.Details(fans)); break;
                 case CompactMonitorItems.Charge when s?.Battery.OrDefault is { } own:
                     parts.Add(Loc.T("本机电池 ", "This PC's battery ") + PowerText.Percent(own.Percent) + Loc.T("，", ", ") + PowerText.State(own) + LevelWords(BatteryModel.Level(own, BatteryModel.LowPercent))); break;
             }

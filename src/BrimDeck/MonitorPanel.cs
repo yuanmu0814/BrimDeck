@@ -69,7 +69,7 @@ public partial class MainWindow
     private SensorStates StripSensors => _app.Monitor is { } monitor ? new(monitor.CpuSensor, monitor.GpuSensor, monitor.StorageState, monitor.DriveSensor)
     {
         Power = monitor.PowerSensor == SensorState.None && Native.BatteryProvider.SystemHasBattery && !Native.BatteryProvider.OnMains ? SensorState.Unknown : monitor.PowerSensor,
-        Charge = monitor.BatterySensor, Frames = monitor.FramesSensor
+        Charge = monitor.BatterySensor, Frames = monitor.FramesSensor, Fans = monitor.FansSensor
     } : SensorStates.Unknown;
     // Whether this panel's open page shows the frame rate's line (its layout had room for it): the frame rate is read for it then.
     internal bool PageShowsFrames => _monitorView?.ShowsFrames == true;

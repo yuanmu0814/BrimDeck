@@ -16,6 +16,7 @@ internal static class Program
         {
             // "--only power": just the power and battery checks, for a quick look at what this machine reports.
             if (args is ["--only", "power"]) { PowerChecks.Run(Check); return Finish(); }
+            if (args is ["--only", "fans"]) { FanChecks.Run(Check); return Finish(); }
             if (args is ["--only", "gpu"]) { CheckGpus(); return Finish(); }
             if (args is ["--only", "capture"]) { CaptureChecks.Run(Check); return Finish(); }
             if (args is ["--only", "frames"]) { FrameRateChecks.Run(Check); return Finish(); }

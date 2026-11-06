@@ -255,8 +255,8 @@ static class PowerTests
     private static void Readings(Action<string, bool> check)
     {
         var table = CompactMonitor.Normalize(null);
-        check("Readings: Power and Charge are last in the table but for the frame rate, hidden",
-            table.Select(reading => reading.Item).TakeLast(3).SequenceEqual([CompactMonitorItems.Power, CompactMonitorItems.Charge, CompactMonitorItems.Frames]) && table.Where(reading => reading.Item is CompactMonitorItems.Power or CompactMonitorItems.Charge).All(reading => !reading.Visible));
+        check("Readings: Power and Charge precede the frame rate and fans, hidden",
+            table.Select(reading => reading.Item).TakeLast(4).SequenceEqual([CompactMonitorItems.Power, CompactMonitorItems.Charge, CompactMonitorItems.Frames, CompactMonitorItems.Fans]) && table.Where(reading => reading.Item is CompactMonitorItems.Power or CompactMonitorItems.Charge).All(reading => !reading.Visible));
         check("Readings: they leave a short row early, after the frame rate, the machine's battery after the drives", CompactMonitor.LeaveOrder.Take(4).SequenceEqual([CompactMonitorItems.Frames, CompactMonitorItems.Power, CompactMonitorItems.Storage, CompactMonitorItems.Charge]) && CompactMonitor.LeaveOrder.Count == CompactMonitor.Order.Count);
 
         // Full turns the new readings on, Brief turns them off.

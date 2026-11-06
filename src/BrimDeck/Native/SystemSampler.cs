@@ -55,6 +55,9 @@ internal sealed class SystemSampler : IDisposable
     // The whole machine's power and the machine's battery (PowerProvider, BatteryProvider), made on the sampling thread.
     private PowerProvider? _power;
     private BatteryProvider? _battery;
+    private ClevoFans? _fans;
+    private volatile bool _fansWanted;
+    private volatile int _fanMaximumRpm = FanSpeeds.DefaultMaximumRpm;
     private readonly Queue<double> _powerHistory = new(HistoryLength);
     private readonly PowerStats _powerStats = new(HistoryLength);
     // Where the last whole-machine figure came from: the peak and mean (of the curve's readings) start over when it changes (plugged in
@@ -169,6 +172,11 @@ internal sealed class SystemSampler : IDisposable
     public SensorState BatterySensor => _battery?.State ?? SensorState.Unknown;
     // Whether frame rates can be read: Found while they are, None without permission, Unknown before they are asked for.
     public SensorState FramesSensor => _frames.State;
+    public SensorState FansSensor => _fans?.State ?? SensorState.Unknown;
+    public void SetFans(bool wanted, int maximumRpm)
+    {
+        _fanMaximumRpm = maximumRpm; _fansWanted = wanted;
+    }
 
     // generation: the thread's own; a thread replaced (Replace) leaves its providers to the thread stuck in them.
     private void Run(int generation)
@@ -190,6 +198,7 @@ internal sealed class SystemSampler : IDisposable
         _power = new PowerProvider(_meterPdh, stuck);
         _gpuTemperatures = new GpuTemperatures(stuck);
         _battery = new BatteryProvider();
+        _fans = new ClevoFans(stuck);
         bool primed = false, first = false;
         while (!_disposed && Volatile.Read(ref _generation) == generation)
         {
@@ -261,6 +270,7 @@ internal sealed class SystemSampler : IDisposable
         _power!.Sample(false, false, 0, [], default, false); _storage.Rest(); _bridges.Rest();
         _lastProcesses = Reading<ProcessList>.Unavailable(Why.Waiting); _processes.Dispose(); ProcessIcons.Clear();
         _cpu!.Forget();
+        _fans?.Rest();
     }
 
     // The counters just asked for, read once: the power meter's, and the adapters' when they have just joined their query.
@@ -369,7 +379,7 @@ internal sealed class SystemSampler : IDisposable
             Power = power, Battery = battery, PowerHistory = _powerHistory.ToArray(),
             PowerSummary = _powerStats.Summary(now),
             CpuPower = _cpuPower.Track(now), GpuPower = _gpuPower.Track(now),
-            Frames = frames
+            Frames = frames, Fans = _fans!.Sample(_fansWanted, _fanMaximumRpm)
         };
         var shown = WithGpu(snapshot, _autoGpu, out bool automatic);
         if (automatic && shown.Gpu.TryGet(out var gpu)) Volatile.Write(ref _autoGpu, gpu.Luid);
@@ -449,7 +459,7 @@ internal sealed class SystemSampler : IDisposable
         _frames.Dispose();
         _wake.Set();
         // The thread may be inside a reading; it ends on its own as a background thread if it does not stop in time.
-        if (_thread?.Join(1000) != false) { _cpuPdh?.Dispose(); _gpuPdh?.Dispose(); _zonesPdh?.Dispose(); _meterPdh?.Dispose(); _power?.Dispose(); _processes.Dispose(); _network.Dispose(); _gpuTemperatures?.Dispose(); _wake.Dispose(); }
+        if (_thread?.Join(1000) != false) { _cpuPdh?.Dispose(); _gpuPdh?.Dispose(); _zonesPdh?.Dispose(); _meterPdh?.Dispose(); _power?.Dispose(); _processes.Dispose(); _network.Dispose(); _gpuTemperatures?.Dispose(); _fans?.Dispose(); _wake.Dispose(); }
     }
 }
 

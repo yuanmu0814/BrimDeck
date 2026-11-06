@@ -149,6 +149,7 @@ internal sealed class Renderer(App app, string output, string language, string[]
         // Exercises the real panel's placement with synthetic data; no account or media session is read.
         if (scenes.Contains("screen-edges")) await ScreenEdges();
         if (scenes.Contains("ai-activity")) await AiActivityScenes();
+        if (scenes.Contains("fans")) await FanScenes();
         if (scenes.Contains("ai-width")) await AiWidthScenes();
         Directory.Delete(folder, true);
     }
@@ -822,6 +823,40 @@ internal sealed class Renderer(App app, string output, string language, string[]
     // read once a second: tick counts the seconds, and tick 0 is the reading of the still image. Every figure moves around its
     // value at tick 0 from one second to the next, and the minute of history is the same figures for the 59 seconds before, so
     // the lines scroll on as the readings come in.
+    private async Task FanScenes()
+    {
+        Program.SetProperty(app, "Exiting", true);
+        _settings.Animations = false; _settings.CompactSmoothing = CompactSmoothing.Off;
+        _settings.Style = CompactStyle.Capsule; _settings.CapsuleAutoWidth = true; _settings.CapsuleHeight = 32;
+        _settings.CapsuleMonitor = true; _settings.CapsuleSummary = true;
+        _settings.CapsuleMusic = _settings.CapsuleEqualizer = _settings.CapsuleClock = false;
+        _settings.CapsuleOrder = [CompactPart.Monitor, CompactPart.Rings, CompactPart.Music, CompactPart.Equalizer, CompactPart.Clock];
+        _settings.CompactReadings = CompactMonitor.Normalize([
+            new() { Item = CompactMonitorItems.Cpu }, new() { Item = CompactMonitorItems.Memory }, new() { Item = CompactMonitorItems.Gpu },
+            new() { Item = CompactMonitorItems.Fans }, new() { Item = CompactMonitorItems.Download }, new() { Item = CompactMonitorItems.Upload }, new() { Item = CompactMonitorItems.Power }]);
+        var snapshot = MonitorSample() with { Fans = new FanSample(4760, 4607), Power = new PowerSample(53, PowerOrigin.Estimated, PowerSource.Components, []) };
+        void Feed() => Program.Call(_deck, "MonitorUpdated", [typeof(MonitorSnapshot)], snapshot);
+        var fan = _settings.CompactReadings.First(reading => reading.Item == CompactMonitorItems.Fans);
+        var theme = Type.GetType("BrimDeck.PanelTheme, BrimDeck")!;
+        foreach (string palette in new[] { PanelThemes.Light, PanelThemes.Dark })
+        {
+            _settings.PanelTheme = palette; theme.GetMethod("Use", Program.Any)!.Invoke(null, [_settings, false, false]);
+            foreach (int scale in new[] { 100, 150 })
+            foreach (string mode in new[] { "ratio", "rpm", "ring" })
+            {
+                _settings.PanelScale = scale; fan.Figures = mode == "rpm" ? [CompactFans.Rpm] : null; fan.ShowValue = mode != "ring";
+                Refresh(); _deck.SetExpanded(false, true); await Settle(); Feed(); await Settle(); Feed(); await Settle();
+                var strip = (FrameworkElement)Program.Field(_deck, "_compactStrip")!;
+                double preferred = (double)strip.GetType().GetProperty("PreferredWidth")!.GetValue(strip)!;
+                if (strip.ActualWidth + 1 < preferred) throw new InvalidOperationException($"Fan {mode} row clipped: {strip.ActualWidth} < {preferred}");
+                await SaveAiIsland($"fans-{mode}-{palette}-{scale}");
+            }
+        }
+        fan.ShowValue = true;
+        await SettingsPage("fans-settings", 9);
+        Console.WriteLine("Fan dial, RPM and ratio widths passed in both themes at 100% and 150%.");
+    }
+
     private static MonitorSnapshot MonitorSample(int tick = 0)
     {
         // A slow wander between -2 and 2 and a jump between -1 and 1 that changes every second; both are 0 at tick 0.
@@ -952,6 +987,28 @@ internal sealed class Renderer(App app, string output, string language, string[]
         TextOptions.SetTextFormattingMode(root, TextFormattingMode.Ideal);
         root.Measure(new Size(width, height)); root.Arrange(new Rect(0, 0, width, height));
         await Settle();
+        if (name == "fans-settings")
+        {
+            static IEnumerable<DependencyObject> Descendants(DependencyObject node)
+            {
+                yield return node;
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                    foreach (var child in Descendants(VisualTreeHelper.GetChild(node, i))) yield return child;
+            }
+            var nodes = Descendants(root).ToList();
+            var unit = nodes.OfType<System.Windows.Controls.ComboBox>().First(control => System.Windows.Automation.AutomationProperties.GetName(control) == (_english ? "Fan figure unit" : "风扇数值单位"));
+            if (unit.SelectedIndex != 0) throw new InvalidOperationException("Fan default must be the speed ratio.");
+            unit.SelectedIndex = 1;
+            _settings = app.Settings;
+            if (!CompactFans.ShowsRpm(_settings.CompactReadings.First(reading => reading.Item == CompactMonitorItems.Fans))) throw new InvalidOperationException("Fan RPM selector did not update settings.");
+            unit.SelectedIndex = 0;
+            _settings = app.Settings;
+            if (CompactFans.ShowsRpm(_settings.CompactReadings.First(reading => reading.Item == CompactMonitorItems.Fans))) throw new InvalidOperationException("Fan ratio selector did not update settings.");
+            var row = nodes.OfType<FrameworkElement>().First(control => control.Tag is CompactMonitorItems.Fans);
+            var scroll = (System.Windows.Controls.ScrollViewer)Program.Field(window, "_scroll")!;
+            scroll.ScrollToVerticalOffset(row.TranslatePoint(new Point(), (UIElement)scroll.Content).Y - 220);
+            await Settle();
+        }
         root.UpdateLayout();
         var bitmap = new RenderTargetBitmap((int)(width * scale), (int)(height * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
         bitmap.Render(root); bitmap.Freeze();

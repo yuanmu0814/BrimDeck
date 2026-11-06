@@ -38,19 +38,19 @@ internal static class CompactReadingTests
             && brief.CompactMonitor == CompactMonitorMode.Brief && brief.CompactMonitorItems == CompactMonitor.Rings);
         var custom = Read("""{"AppVersion":"0.1.0","CompactMonitor":2,"CompactMonitorItems":62}""");
         check("Compact readings: old Custom keeps its readings with figures",
-            CompactMonitor.Visible(custom.CompactReadings) == (All & ~Columns) && CompactMonitor.Values(custom.CompactReadings) == CompactMonitor.Rings
+            CompactMonitor.Visible(custom.CompactReadings) == (All & ~Columns) && CompactMonitor.Values(custom.CompactReadings) == CompactMonitor.Dials
             && custom.CompactMonitor == CompactMonitorMode.Custom && custom.CompactMonitorItems == (All & ~Columns) && CompactMonitor.Preset(custom.CompactReadings) is null);
         var empty = Read("""{"AppVersion":"0.1.0","CompactMonitor":2,"CompactMonitorItems":0}""");
         check("Compact readings: old Custom with nothing chosen shows CPU", CompactMonitor.Visible(empty.CompactReadings) == Cpu && empty.CompactMonitorItems == Cpu);
         var unknownMode = Read("""{"AppVersion":"0.1.0","CompactMonitor":9}""");
         check("Compact readings: an unknown old mode reads as the old Full", CompactMonitor.Visible(unknownMode.CompactReadings) == All);
         var defaults = new DeckSettings(); defaults.Normalize();
-        check("Compact readings: defaults show every usage reading", CompactMonitor.Visible(defaults.CompactReadings) == All && CompactMonitor.Values(defaults.CompactReadings) == CompactMonitor.Rings
+        check("Compact readings: defaults show every usage reading", CompactMonitor.Visible(defaults.CompactReadings) == All && CompactMonitor.Values(defaults.CompactReadings) == CompactMonitor.Dials
             && Same(defaults.CompactReadings, [.. CompactMonitor.Order]));
 
         var odd = Read("""{"AppVersion":"0.1.0","CompactMonitor":0,"CompactReadings":[{"Item":256,"Visible":true},null,{"Item":16,"Visible":true,"ShowValue":false,"Color":"#12ab3c"},{"Item":2,"Visible":false,"Color":"red"},{"Item":16,"Visible":false}]}""");
         check("Compact readings: unknown and repeated readings are dropped, missing ones join hidden",
-            Same(odd.CompactReadings, Download, Cpu, Columns, Memory, Gpu, Upload, CompactMonitorItems.Storage, CompactMonitorItems.Power, CompactMonitorItems.Charge, CompactMonitorItems.Frames) && odd.CompactReadings[0].Visible && !odd.CompactReadings[1].Visible
+            Same(odd.CompactReadings, Download, Cpu, Columns, Memory, Gpu, Upload, CompactMonitorItems.Storage, CompactMonitorItems.Power, CompactMonitorItems.Charge, CompactMonitorItems.Frames, CompactMonitorItems.Fans) && odd.CompactReadings[0].Visible && !odd.CompactReadings[1].Visible
             && odd.CompactReadings.Skip(2).All(r => !r.Visible) && odd.CompactMonitorItems == Download && odd.CompactMonitor == CompactMonitorMode.Custom);
         check("Compact readings: an older own color moves into the custom scheme, normalized", odd.MonitorPalette == MonitorPalette.Custom
             && odd.MonitorCustomColors is { Base: MonitorPalette.Theme, Download: "#12AB3C", Cpu: null } && odd.CompactReadings.All(r => !r.HasOwnColors));
@@ -75,7 +75,7 @@ internal static class CompactReadingTests
         CompactMonitor.Apply(readings, CompactMonitorMode.Full);
         check("Compact readings: Full keeps the order and the colors", readings.Select(r => r.Item).SequenceEqual(order) && readings[0].Color == "#112233");
         check("Compact readings: Full shows everything with figures", CompactMonitor.Preset(readings) == CompactMonitorMode.Full && CompactMonitor.Visible(readings) == CompactMonitor.Every
-            && CompactMonitor.Values(readings) == CompactMonitor.Rings && readings.Where(r => CompactFigures.Has(r.Item)).All(r => CompactFigures.Of(r).SequenceEqual([CompactFigures.Usage, CompactFigures.Temperature])));
+            && CompactMonitor.Values(readings) == CompactMonitor.Dials && readings.Where(r => CompactFigures.Has(r.Item)).All(r => CompactFigures.Of(r).SequenceEqual([CompactFigures.Usage, CompactFigures.Temperature])));
         var before = readings.Select(r => (r.Item, r.Visible, r.ShowValue, r.Color)).ToArray();
         CompactMonitor.Apply(readings, CompactMonitorMode.Custom);
         check("Compact readings: no preset (Custom) changes nothing", readings.Select(r => (r.Item, r.Visible, r.ShowValue, r.Color)).SequenceEqual(before));
@@ -224,7 +224,7 @@ internal static class CompactReadingTests
             && Read("""{"AppVersion":"0.1.0","CompactSmoothing":30}""").CompactSmoothing == CompactSmoothing.Thirty
             && Read("""{"AppVersion":"0.1.0","CompactSmoothing":0}""").CompactSmoothing == CompactSmoothing.Off);
         check("Older colors: they leave the readings, which keep the rest", read.CompactReadings.All(r => !r.HasOwnColors)
-            && !read.CompactReadings.First(r => r.Item == Columns).Visible && Same(read.CompactReadings, Memory, Cpu, Columns, Download, Gpu, Upload, CompactMonitorItems.Storage, CompactMonitorItems.Power, CompactMonitorItems.Charge, CompactMonitorItems.Frames));
+            && !read.CompactReadings.First(r => r.Item == Columns).Visible && Same(read.CompactReadings, Memory, Cpu, Columns, Download, Gpu, Upload, CompactMonitorItems.Storage, CompactMonitorItems.Power, CompactMonitorItems.Charge, CompactMonitorItems.Frames, CompactMonitorItems.Fans));
         var plain = Read("""{"AppVersion":"0.1.0","MonitorPalette":1,"CompactReadings":[{"Item":4}]}""");
         check("Older colors: without own colors the scheme stays", plain.MonitorPalette == MonitorPalette.Graphite && !plain.MonitorCustomColors.Changed);
         var readings = JsonSerializer.Serialize(read.CompactReadings);

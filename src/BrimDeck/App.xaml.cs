@@ -376,6 +376,7 @@ public partial class App : Application
             (shown & CompactMonitorItems.Frames) != 0 || Settings.MonitorFrames && _presentingMonitor.Any(deck => deck.PageShowsFrames),
             // The graphics adapters for the page and the row's GPU reading (the power asks for them itself).
             page || (shown & CompactMonitorItems.Gpu) != 0);
+        Monitor?.SetFans(((shown | held) & CompactMonitorItems.Fans) != 0, Settings.FanMaximumRpm);
     }
     // The page reads the machine's power only where there may be something to read: not once the sampler knows there is neither a power
     // source nor a battery (a desktop with nothing), so such a page does not keep asking.

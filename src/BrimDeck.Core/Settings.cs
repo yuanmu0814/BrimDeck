@@ -538,6 +538,7 @@ public sealed class DeckSettings
     // table (the preset it matches and the readings shown), for older versions.
     public CompactMonitorMode CompactMonitor { get; set; }
     public CompactMonitorItems CompactMonitorItems { get; set; } = CompactMonitorItems.Cpu | CompactMonitorItems.Memory | CompactMonitorItems.Download | CompactMonitorItems.Upload;
+    public int FanMaximumRpm { get; set; } = FanSpeeds.DefaultMaximumRpm;
     // The collapsed readings in their order, each shown or not, with or without its figure, in its own color or the palette's.
     // Files saved before the table have none; they take it from CompactMonitor and CompactMonitorItems.
     public List<CompactReading> CompactReadings
@@ -692,6 +693,7 @@ public sealed class DeckSettings
         CompactMonitorItems &= CompactMonitorItems.All;
         if (CompactMonitorItems == CompactMonitorItems.None) CompactMonitorItems = CompactMonitorItems.Cpu;
         CompactReadings = Core.CompactMonitor.Normalize(CompactReadings);
+        FanMaximumRpm = FanMaximumRpm is >= 1000 and <= 15000 ? FanMaximumRpm : FanSpeeds.DefaultMaximumRpm;
         Core.CompactMonitor.MoveColors(this);
         CompactMonitor = Core.CompactMonitor.Preset(CompactReadings) ?? CompactMonitorMode.Custom;
         CompactMonitorItems = Core.CompactMonitor.Shown(CompactReadings);

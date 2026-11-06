@@ -9,6 +9,7 @@ public readonly record struct SensorStates(SensorState Cpu, SensorState Gpu, Sen
     public SensorState Charge { get; init; }
     // Whether frame rates can be read (FrameRates): by event tracing, or else by capturing the screen.
     public SensorState Frames { get; init; }
+    public SensorState Fans { get; init; }
     public static SensorStates Unknown => default;
 }
 

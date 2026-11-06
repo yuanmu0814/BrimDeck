@@ -8,7 +8,7 @@ namespace BrimDeck.Core;
 // restarted), or a reading that has not answered for StuckSeconds, stops that reading for that device: a SensorStop, kept until
 // the user turns it on again in the settings.
 // GpuDriver: an adapter's usage and power asked of its own driver (Native.GpuDrivers).
-public enum GuardedReading { DriveTemperature, CpuTemperature, GpuTemperature, PowerMeter, GpuDriver }
+public enum GuardedReading { DriveTemperature, CpuTemperature, GpuTemperature, PowerMeter, GpuDriver, Fans }
 
 // Device tells the device apart across restarts (a drive's model and bus, a graphics adapter's name, the board and its firmware
 // version, so a firmware update tries again); Name is what the settings call it.
@@ -51,6 +51,7 @@ public static class SensorStops
     // The line the settings show for a stop.
     public static string Notice(SensorStop stop) => stop.Reading switch
     {
+        GuardedReading.Fans => Loc.T("已停止读取风扇转速，上次读取未响应。", "Stopped reading fan speeds after the last read did not respond."),
         GuardedReading.CpuTemperature => Loc.T("已停止读取 CPU 温度，上次读取时电脑可能卡住了。",
             "Stopped reading the CPU temperature: the PC may have frozen the last time it was read."),
         GuardedReading.PowerMeter => Loc.T("已停止读取功率计与 CPU 功耗，上次读取时电脑可能卡住了。",

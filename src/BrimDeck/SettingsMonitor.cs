@@ -367,7 +367,8 @@ public sealed partial class SettingsWindow
             [(CompactSmoothing.Off, Loc.T("不平滑", "Off")), (CompactSmoothing.Ten, Loc.T("10 帧", "10 fps")), (CompactSmoothing.Thirty, Loc.T("30 帧", "30 fps"))],
             v => Change(s => s.CompactSmoothing = v));
         Refresh();
-        Group(WithFrameAccess(table, () => Reading(S, CompactMonitorItems.Frames).Visible), quick, status, smoothing);
+        Group(WithFrameAccess(table, () => Reading(S, CompactMonitorItems.Frames).Visible), quick,
+            SliderRow(Loc.T("风扇最大转速", "Maximum fan speed"), S.FanMaximumRpm, 1000, 15000, 50, "RPM", value => Change(s => s.FanMaximumRpm = (int)value)), status, smoothing);
     }
 
     private static Grid ReadingColumns()
@@ -401,7 +402,7 @@ public sealed partial class SettingsWindow
         CompactMonitorItems.Columns => Loc.T("核心柱", "Core columns"), CompactMonitorItems.Memory => Loc.T("内存", "Memory"), CompactMonitorItems.Gpu => "GPU",
         CompactMonitorItems.Download => Loc.T("下载", "Download"), CompactMonitorItems.Upload => Loc.T("上传", "Upload"),
         CompactMonitorItems.Storage => Loc.T("硬盘", "Drives"), CompactMonitorItems.Power => Loc.T("整机功耗", "System power"),
-        CompactMonitorItems.Charge => Loc.T("本机电池", "This PC's battery"), CompactMonitorItems.Frames => Loc.T("帧率", "Frame rate"), _ => "CPU"
+        CompactMonitorItems.Charge => Loc.T("本机电池", "This PC's battery"), CompactMonitorItems.Frames => Loc.T("帧率", "Frame rate"), CompactMonitorItems.Fans => Loc.T("风扇", "Fans"), _ => "CPU"
     };
     private static CompactReading Reading(DeckSettings settings, CompactMonitorItems item) => settings.CompactReadings.First(reading => reading.Item == item);
 
@@ -424,6 +425,11 @@ public sealed partial class SettingsWindow
         if (item == CompactMonitorItems.Frames)
         {
             var menu = FramesPartsMenu(refresh, edit);
+            Grid.SetColumn(menu, 2); row.Children.Add(menu);
+        }
+        if (item == CompactMonitorItems.Fans)
+        {
+            var menu = FansFigureMenu(refresh, edit);
             Grid.SetColumn(menu, 2); row.Children.Add(menu);
         }
         // The reading's colors in the normal state as the scheme gives them, one per channel (the core columns: one per kind of
@@ -664,6 +670,27 @@ public sealed partial class SettingsWindow
             var parts = options[choice.SelectedIndex].Parts;
             if (parts.SequenceEqual(CompactFrames.Of(Reading(S, CompactMonitorItems.Frames)))) return;
             edit(s => Reading(s, CompactMonitorItems.Frames).Figures = [.. parts]);
+        };
+        return choice;
+    }
+
+    private ComboBox FansFigureMenu(List<Action> refresh, Action<Action<DeckSettings>> edit)
+    {
+        var choice = new ComboBox { Width = 150, Height = 30, Style = (Style)FindResource("SettingsCombo"),
+            ItemsSource = new[] { Loc.T("转速比", "Speed ratio"), "RPM" }, HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0) };
+        AutomationProperties.SetName(choice, Loc.T("风扇数值单位", "Fan figure unit")); PopupMotion.Attach(choice);
+        bool syncing = false;
+        refresh.Add(() =>
+        {
+            syncing = true;
+            try { choice.SelectedIndex = CompactFans.ShowsRpm(Reading(S, CompactMonitorItems.Fans)) ? 1 : 0; choice.IsEnabled = Reading(S, CompactMonitorItems.Fans).ShowValue; }
+            finally { syncing = false; }
+        });
+        choice.SelectionChanged += (_, _) =>
+        {
+            if (syncing || choice.SelectedIndex < 0) return;
+            edit(s => Reading(s, CompactMonitorItems.Fans).Figures = choice.SelectedIndex == 1 ? [CompactFans.Rpm] : null);
         };
         return choice;
     }
