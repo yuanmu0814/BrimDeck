@@ -14,6 +14,7 @@ Directory.CreateDirectory(root);
 try
 {
     AiActivityTests.Run(Check);
+    QuotaForecastTests.Run(Check);
     await PiUsageTests.Run(root, Check);
     ModelUsageTests.Run(Check);
     AntigravityUsageTests.Run(root, Check);

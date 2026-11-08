@@ -83,7 +83,12 @@ public partial class MainWindow
         int pageSize = Math.Max(1, (int)((width - 40) / AppPresets.MinimumColumnWidth));
         int count = Math.Min(columns.Count, pageSize);
         double columnWidth = (width - EdgeInset * 2) / count;
-        var views = columns.Select(x => Quotas(x.Entry, x.Quota)).ToList();
+        // At the minimum height two stacked quotas do not fit below the activity tabs and title. Show one per page;
+        // a wide single column can still place both beside each other. Every quota stays reachable through the existing pager.
+        var smallest = Layout.For(Tier.Tiny);
+        bool stackedFits = smallest.Required(2, false) + smallest.Toolbar + smallest.Bottom + ColumnTopInset <= height;
+        int capacity = !stackedFits && !(count == 1 && columnWidth >= 480) ? 1 : 2;
+        var views = columns.Select(x => Quotas(x.Entry, x.Quota, capacity)).ToList();
         var (layout, inline, wide) = Fit(count, views.Max(view => view.Slots), columnWidth, height);
         return (layout, inline, wide, count, columnWidth, views);
     }
@@ -148,7 +153,7 @@ public partial class MainWindow
         var columns = DashboardUsage.Columns(Settings, Snapshots);
         if (columns.Count == 0) return null;
         var fit = FitColumns(columns, ContentCanvas.Width, UsagePanelHeight);
-        return new UsageBuild($"{fit.Layout.Tier}|{fit.Layout.Footer}|{fit.Inline}|{fit.Wide}|{fit.Count}", Snapshots, Settings, _applicationPage,
+        return new UsageBuild($"{fit.Layout.Tier}|{fit.Layout.Footer}|{fit.Inline}|{fit.Wide}|{fit.Count}|{fit.Views.Max(view => view.Slots)}", Snapshots, Settings, _applicationPage,
             string.Join(",", _quotaPages.OrderBy(page => page.Key).Select(page => $"{page.Key:N}:{page.Value}")), PanelTheme.Generation, Loc.Language,
             DateTime.Now.Ticks / TimeSpan.TicksPerMinute, VisualTreeHelper.GetDpi(this).DpiScaleY, _scale);
     }
@@ -268,9 +273,8 @@ public partial class MainWindow
     // Where each gliding strip's fill was last, by its key.
     private static readonly Dictionary<string, (double X, double Width, long At)> SegmentFills = [];
 
-    private QuotaView Quotas(AppEntry entry, ProviderSnapshot snapshot)
+    private QuotaView Quotas(AppEntry entry, ProviderSnapshot snapshot, int capacity)
     {
-        const int capacity = 2;
         var quotas = snapshot.Metrics.OrderBy(x => x.Window is > 0 ? x.Window.Value : int.MaxValue).ToList();
         // Antigravity labels its quotas "Gemini · 5 小时", "Claude · 每周" and so on. Each group starts its own page, Gemini first,
         // so the first page shows rows 1 and 2 (Gemini) and a click on the column shows rows 3 and 4 (Claude), the same rows and
@@ -316,7 +320,7 @@ public partial class MainWindow
         }
         // See FitColumns. A short last page leaves its remaining columns empty.
         var (layout, inline, wide, count, columnWidth, views) = FitColumns(columns, ContentCanvas.Width, UsagePanelHeight);
-        _usageForm = $"{layout.Tier}|{layout.Footer}|{inline}|{wide}|{count}";
+        _usageForm = $"{layout.Tier}|{layout.Footer}|{inline}|{wide}|{count}|{views.Max(view => view.Slots)}";
         int first = _applicationPage * pageSize;
         columns = columns.Skip(first).Take(pageSize).ToList(); views = views.Skip(first).Take(pageSize).ToList();
         // The quotas start EdgeInset + ColumnPad from the panel edge; the header lines up with them.
@@ -344,7 +348,7 @@ public partial class MainWindow
         // fill in where they will stay instead of the whole column changing when they arrive.
         bool awaiting = Awaiting(snapshot);
         int blocks = awaiting ? view.Slots : view.Quotas.Count;
-        FrameworkElement Block(int i) => awaiting ? SkeletonBlock(entry, layout, i) : QuotaBlock(entry, view.Quotas[i], layout, i);
+        FrameworkElement Block(int i) => awaiting ? SkeletonBlock(entry, layout, i) : QuotaBlock(entry, snapshot, view.Quotas[i], layout, i);
         bool off = blocks == 0;
         // Only this column changes: it comes up from faint while the others stay as they are.
         void NextQuotaPage() { _quotaPages[entry.InstanceId] = (view.Page + 1) % view.Pages; _flippedColumn = entry.InstanceId; RenderUsage(); }
@@ -371,6 +375,14 @@ public partial class MainWindow
             var chip = PlanChip(snapshot, layout, chipTop, chipLift);
             Grid.SetColumn(chip, 1); head.Children.Add(chip);
             chip.Measure(new Size(double.PositiveInfinity, layout.Head)); occupied += chip.DesiredSize.Width;
+        }
+        if (view.Pages > 1)
+        {
+            var page = UI.Fixed($"{view.Page + 1}/{view.Pages}", Math.Min(10, layout.Plan), layout.Head, UI.Tertiary);
+            page.HorizontalAlignment = HorizontalAlignment.Right;
+            page.ToolTip = Loc.T("点击此列切换配额", "Click this column to switch quotas");
+            Grid.SetColumn(page, 2); head.Children.Add(page);
+            page.Measure(new Size(double.PositiveInfinity, layout.Head)); occupied += page.DesiredSize.Width + 8;
         }
         name.MaxWidth = Math.Max(20, innerWidth - occupied);
         // The page stretches within its size step instead of being built again (RenderUsage), so the name gives way to the plan
@@ -558,7 +570,7 @@ public partial class MainWindow
     // Three rows per quota: the period name, the used share with its reset countdown, and the track.
     // slot is the quota's place in its column: a bar keeps its place's last share (QuotaBar), so a new reading eases the same bar
     // and a quota page flip eases each bar from the quota it replaces, as the monitor page's values move.
-    private static Grid QuotaBlock(AppEntry entry, UsageMetric quota, Layout layout, int slot)
+    private static Grid QuotaBlock(AppEntry entry, ProviderSnapshot snapshot, UsageMetric quota, Layout layout, int slot)
     {
         double used = Math.Clamp(quota.UsedPercent ?? 100, 0, 100);
         string color = quota.UsedPercent is null ? PanelTheme.QuotaTheme(entry) : PanelTheme.QuotaColor(entry, used);
@@ -610,6 +622,32 @@ public partial class MainWindow
             reset.ToolTip = text ? null : offPeak ? OffPeakTooltip(entry) : expiryAbove ? quota.ExpiresAt!.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")
                 : countText.Length > 0 ? CountTooltip(quota) : MetricPercentTooltip(quota);
             Grid.SetColumn(reset, 1); labelRow.Children.Add(reset);
+        }
+        else if (QuotaForecast.For(quota, snapshot, DateTimeOffset.Now) is { } forecast)
+        {
+            // The period and forecast share the otherwise empty label row. The reset countdown keeps its own place below.
+            // Measure real text on resize; narrow columns use a shorter label with the full estimate in hover/accessibility.
+            var prediction = UI.Fixed(forecast.Text(), layout.Reset, layout.LabelRow, forecast.Warns ? PanelTheme.AppWarning(entry) : UI.Secondary);
+            prediction.HorizontalAlignment = HorizontalAlignment.Right; prediction.Margin = new Thickness(8, 0, 0, 0);
+            prediction.TextTrimming = TextTrimming.None;
+            var help = forecast.Description(DateTimeOffset.Now, quota.ResetAt!.Value);
+            prediction.ToolTip = help;
+            AutomationProperties.SetAutomationId(prediction, $"quota-forecast-{entry.InstanceId:N}-{slot}");
+            AutomationProperties.SetName(prediction, forecast.Text()); AutomationProperties.SetHelpText(prediction, help);
+            void FitPrediction(double width)
+            {
+                label.Measure(new Size(double.PositiveInfinity, layout.LabelRow));
+                double available = Math.Max(0, width - label.DesiredSize.Width - 8);
+                foreach (var wording in new[] { forecast.Text(), forecast.Text(compact: true), forecast.Brief })
+                {
+                    prediction.Text = wording;
+                    prediction.Measure(new Size(double.PositiveInfinity, layout.LabelRow));
+                    if (prediction.DesiredSize.Width <= available + .5) break;
+                }
+            }
+            labelRow.SizeChanged += (_, e) => FitPrediction(e.NewSize.Width);
+            Grid.SetColumn(prediction, 1); labelRow.Children.Add(prediction);
+            AutomationProperties.SetHelpText(block, quota.Description + "\n" + help);
         }
         var rightText = text ? quota.ResetText : offPeak ? (change is { } next ? Loc.T(UI.ShortReset(next) + "切换", "switches " + UI.ShortReset(next)) : "")
             : resetText.Length > 0 ? resetText : expiryText;

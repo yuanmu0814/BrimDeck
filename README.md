@@ -74,6 +74,7 @@ BrimDeck sits at the top center of the screen and comes in three styles: Notch (
 <img src="docs/en-US/images/details.png" width="100%" alt="Model details page: tokens and cost by app and model">
 
 - One column per tool shows the plan, quota usage and reset countdowns, for up to 7 tools at once.
+- Periodic percentage quotas also show Codex Pacer's forecast: when the allowance is expected to run out, or how much should remain at reset. Each window uses its own average consumption since it opened; the first 5% waits for more data. Stale or failed readings have no forecast. Narrow panels show a shorter label, with the full estimate and calculation basis on hover.
 - The bottom of each column totals tokens and estimated cost for today and the last 7 days.
 - Token and cost details are available for each model, filtered by tool and date range.
 

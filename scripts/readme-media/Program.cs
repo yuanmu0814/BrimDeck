@@ -153,7 +153,92 @@ internal sealed class Renderer(App app, string output, string language, string[]
         if (scenes.Contains("fan-page")) await FanPageScenes();
         if (scenes.Contains("usb-storage")) await FanPageScenes(usb: true);
         if (scenes.Contains("ai-width")) await AiWidthScenes();
+        if (scenes.Contains("quota-forecast")) await QuotaForecastScenes();
         Directory.Delete(folder, true);
+    }
+
+    private async Task QuotaForecastScenes()
+    {
+        _settings.Animations = _settings.AiStatusAnimations = _settings.QuotaAlerts = false;
+        _settings.Style = CompactStyle.Capsule; _settings.PanelScale = 100; _settings.UsagePage = true;
+        Program.SetField(_deck, "_aiTasksPage", false);
+        Program.Call(_deck, "SelectPage", [typeof(DeckPage), typeof(bool)], DeckPage.Usage, false);
+        static IEnumerable<DependencyObject> Nodes(DependencyObject parent)
+        {
+            yield return parent;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+                foreach (var node in Nodes(VisualTreeHelper.GetChild(parent, i))) yield return node;
+        }
+        var theme = Type.GetType("BrimDeck.PanelTheme, BrimDeck")!;
+        int rendered = 0;
+        foreach (string palette in new[] { PanelThemes.Light, PanelThemes.Dark })
+        foreach (var (width, height) in new[] { (1008, 300), (760, 240), (440, 280), (440, 140) })
+        foreach (string state in new[] { "weekly", "two-windows", "multi", "early", "stale" })
+        {
+            var now = DateTimeOffset.Now;
+            ProviderSnapshot Snapshot(ProviderId id, params Quota[] quotas) => new(id)
+            {
+                Plan = "pro", LiveQuota = true, QuotaTime = now, Quotas = [.. quotas], UsageAvailable = true,
+                Status = Loc.T("已连接", "Connected"), StatusLabel = Loc.T("已连接", "Connected")
+            };
+            var codex = Snapshot(ProviderId.Codex, new Quota("每周额度", 44, now.AddHours(86), 10080));
+            if (state == "two-windows") codex.Quotas = [new("5 小时额度", 80, now.AddHours(2.5), 300), new("每周额度", 70, now.AddDays(3.5), 10080)];
+            if (state == "early") codex.Quotas = [new("每周额度", 2, now.AddHours(166), 10080)];
+            if (state == "stale") { codex.IsStale = true; codex.QuotaTime = now.AddMinutes(-6); }
+            var claude = Snapshot(ProviderId.Claude, new Quota("5 小时额度", 70, now.AddHours(2.5), 300), new Quota("每周额度", 20, now.AddDays(3.5), 10080));
+            _settings.Apps = [new() { QuotaSource = ProviderId.Codex, UsageSource = ProviderId.Codex }];
+            if (state == "multi") _settings.Apps.Add(new() { QuotaSource = ProviderId.Claude, UsageSource = ProviderId.Claude });
+            _settings.Width = width; _settings.Height = height; _settings.PanelTheme = palette;
+            theme.GetMethod("Use", Program.Any)!.Invoke(null, [_settings, false, false]);
+            Refresh(); _deck.SetSnapshots([codex, claude]); _deck.SetExpanded(true, true);
+            Program.SetField(_deck, "_usageBuilt", null); _deck.RenderUsage(); await Settle();
+            var content = (FrameworkElement)_deck.FindName("UsageContent")!;
+            var island = (FrameworkElement)_deck.FindName("Island")!;
+            var predictions = Nodes(content).OfType<System.Windows.Controls.TextBlock>()
+                .Where(node => System.Windows.Automation.AutomationProperties.GetAutomationId(node).StartsWith("quota-forecast-", StringComparison.Ordinal)).ToArray();
+            bool singleQuota = height < 168 && (state == "multi" || width < 480);
+            int expected = state == "stale" ? 0 : state == "two-windows" ? singleQuota ? 1 : 2 : state == "multi" ? singleQuota ? 2 : 3 : 1;
+            if (predictions.Length != expected) throw new InvalidOperationException($"Forecast count {predictions.Length}, expected {expected}: {state} {width}x{height}.");
+            foreach (var prediction in predictions)
+            {
+                if (prediction.Text.Length == 0 || prediction.TextTrimming != TextTrimming.None || prediction.ToolTip is not string help || !help.Contains(Loc.T("重置时间", "Resets")))
+                    throw new InvalidOperationException("A visible forecast lost its full hover details.");
+                var origin = prediction.TranslatePoint(new Point(), content);
+                if (origin.X < -.5 || origin.Y < -.5 || origin.X + prediction.ActualWidth > content.ActualWidth + .5 || origin.Y + prediction.ActualHeight > content.ActualHeight + .5)
+                    throw new InvalidOperationException($"A forecast escaped the usage page: {state} {width}x{height}.");
+                var natural = new FormattedText(prediction.Text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                    new Typeface(prediction.FontFamily, prediction.FontStyle, prediction.FontWeight, prediction.FontStretch), prediction.FontSize, prediction.Foreground, 1);
+                if (natural.WidthIncludingTrailingWhitespace > prediction.ActualWidth + 1)
+                    throw new InvalidOperationException($"A forecast was clipped: {state} {width}x{height}, {prediction.Text}.");
+            }
+            foreach (var bar in Nodes(content).OfType<FrameworkElement>().Where(node => node.GetType().Name == "QuotaBar"))
+            {
+                var origin = bar.TranslatePoint(new Point(), island);
+                if (origin.Y < 0 || origin.Y + bar.ActualHeight > island.ActualHeight + .5)
+                    throw new InvalidOperationException($"A quota bar was clipped by the panel: {state} {width}x{height}.");
+            }
+            if (singleQuota && state == "two-windows")
+            {
+                var surface = Nodes(content).OfType<System.Windows.Controls.Border>().First(node => Equals(node.Tag, _settings.Apps[0].InstanceId));
+                surface.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, Environment.TickCount, System.Windows.Input.MouseButton.Left)
+                    { RoutedEvent = System.Windows.Input.Mouse.MouseUpEvent });
+                await Settle();
+                var pages = (Dictionary<Guid, int>)Program.Field(_deck, "_quotaPages")!;
+                if (pages.GetValueOrDefault(_settings.Apps[0].InstanceId) != 1) throw new InvalidOperationException("The short panel's quota pager did not advance.");
+                var second = Nodes((FrameworkElement)_deck.FindName("UsageContent")!).OfType<System.Windows.Controls.TextBlock>()
+                    .Single(node => System.Windows.Automation.AutomationProperties.GetAutomationId(node).StartsWith("quota-forecast-", StringComparison.Ordinal));
+                if (!System.Windows.Automation.AutomationProperties.GetName(second).Contains(Loc.T("1 天", "1d"))) throw new InvalidOperationException("The next quota page did not show the weekly forecast.");
+                // Grow within the Tiny tier, without clearing the build cache, then shrink again. The page capacity must follow.
+                _settings.Height = 180; Refresh(); await Settle();
+                int afterResize = Nodes((FrameworkElement)_deck.FindName("UsageContent")!).OfType<System.Windows.Controls.TextBlock>()
+                    .Count(node => System.Windows.Automation.AutomationProperties.GetAutomationId(node).StartsWith("quota-forecast-", StringComparison.Ordinal));
+                if (afterResize != 2) throw new InvalidOperationException("Growing the short panel did not restore both quota windows.");
+                _settings.Height = height; Refresh(); await Settle();
+            }
+            if (height >= 240 || state == "two-windows" || state == "early") await SaveAiIsland($"quota-{state}-{palette}-{width}x{height}");
+            rendered++;
+        }
+        Console.WriteLine($"PASS: {rendered} quota forecast layouts fit both themes, all widths, independent windows and stale/early states ({language}).");
     }
 
     private async Task AiWidthScenes()
