@@ -209,6 +209,7 @@ internal sealed class MonitorView : Grid
     }
     // Whether the page has the power line (the layout had room for it): the power is read only then.
     public bool ShowsPower => _power is not null;
+    public void FocusPowerLink() => _power?.Focus();
     // Whether the page has the frame rate's line (the layout had room for it): the frame rate is read for it only then.
     public bool ShowsFrames => _frames is not null;
     public bool ShowsFans => _fans is not null;

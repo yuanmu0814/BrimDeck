@@ -154,7 +154,130 @@ internal sealed class Renderer(App app, string output, string language, string[]
         if (scenes.Contains("usb-storage")) await FanPageScenes(usb: true);
         if (scenes.Contains("ai-width")) await AiWidthScenes();
         if (scenes.Contains("quota-forecast")) await QuotaForecastScenes();
+        if (scenes.Contains("power-details")) await PowerDetailScenes();
         Directory.Delete(folder, true);
+    }
+
+    private async Task PowerDetailScenes()
+    {
+        Program.SetProperty(app, "Exiting", true);
+        _settings.Animations = false; _settings.MonitorPage = _settings.MonitorPower = _settings.MonitorFans = _settings.MonitorTemperatures = true;
+        _settings.CapsuleMonitor = false;
+        var type = Type.GetType("BrimDeck.Native.SystemSampler, BrimDeck")!;
+        using var sampler = (IDisposable)Activator.CreateInstance(type, Program.Any, null,
+            [Dispatcher.CurrentDispatcher, (Func<(string?, string?)>)(() => (null, null))], null)!;
+        Program.SetProperty(app, "Monitor", sampler);
+        var storage = Program.Field(sampler, "_storage")!;
+        Program.SetField(storage, "_count", 0); Program.SetField(storage, "_drives", SensorState.None); Program.SetField(storage, "_temperatures", SensorState.None);
+        var theme = Type.GetType("BrimDeck.PanelTheme, BrimDeck")!;
+        static IEnumerable<DependencyObject> Nodes(DependencyObject parent)
+        {
+            yield return parent;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+                foreach (var node in Nodes(VisualTreeHelper.GetChild(parent, i))) yield return node;
+        }
+        MonitorSnapshot Sample(string state)
+        {
+            bool estimated = state == "estimated";
+            double total = state == "battery" ? 24.7 : state == "shortfall" ? 68.2 : estimated ? 31.4 : 41.8;
+            var parts = new List<PowerPart> { new("cpu", "CPU", state == "shortfall" ? 39.4 : 24.6, "CPU meter"), new("gpu", "GPU", state == "shortfall" ? 17.3 : 6.8, "GPU meter") };
+            if (state == "battery") parts = [new("cpu", "CPU", 11.2, "CPU meter"), new("gpu", "GPU", 3.1, "GPU meter")];
+            var battery = new BatterySample(64, state is "battery" or "shortfall" ? BatteryState.Discharging : BatteryState.Charging, 1)
+            { HasRate = true, Watts = state == "battery" ? total : state == "shortfall" ? 9.6 : 8.6, AcOnline = state != "battery", Health = .91, Mode = PowerMode.Balanced };
+            var sample = MonitorSample() with
+            {
+                Power = state == "missing" ? Reading<PowerSample>.Unavailable("No readable meter") : new PowerSample(total, estimated ? PowerOrigin.Estimated : PowerOrigin.Measured, estimated ? PowerSource.Components : state == "battery" ? PowerSource.Battery : PowerSource.SystemMeter, parts),
+                Battery = state == "missing" ? Reading<BatterySample>.Unavailable("no battery") : battery,
+                PowerHistory = state == "missing" ? [] : Enumerable.Range(0, 60).Select(i => total + Math.Sin(i * .5) * 3).ToArray(),
+                PowerSummary = new(total + 5, total - 1, 60, 59), Fans = new FanSample(2185, 1960),
+                Gpu = new GpuSample(35, 0UL) { Temperature = 48 }
+            };
+            return sample with { Cpu = sample.Cpu.Map(cpu => cpu with { Temperature = 62 }) };
+        }
+        var seeded = Sample("charging"); Program.SetProperty(sampler, "Latest", seeded);
+        _settings.MonitorWidth = 1008; _settings.MonitorHeight = 300; SelectPage(DeckPage.Monitor); Refresh(); _deck.SetExpanded(true, true); await Settle();
+        var monitor = Program.Field(_deck, "_monitorView")!;
+        var link = (FrameworkElement)Program.Field(monitor, "_power")!;
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(link)!;
+        if (peer.GetAutomationControlType() != System.Windows.Automation.Peers.AutomationControlType.Hyperlink || !link.Focusable)
+            throw new InvalidOperationException("The power row is not an accessible details link.");
+        ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        await Settle();
+        if (Program.Field(_deck, "_powerDetails") is not true || DeckPages.Order.Count != 3) throw new InvalidOperationException("Power details must open inside Monitor without a new tab.");
+        Program.Call(app, "UpdateMonitorExtras", []);
+        if (Program.Field(sampler, "_powerWanted") is not true || Program.Field(sampler, "_batteryWanted") is not true || Program.Field(sampler, "_storageWanted") is not false)
+            throw new InvalidOperationException("Power details requested the wrong sensor set.");
+        int rendered = 0;
+        foreach (string palette in new[] { PanelThemes.Light, PanelThemes.Dark })
+        foreach (int scale in PanelScales.Choices)
+        foreach (var (width, height) in new[] { (1008, 300), (760, 240), (440, 140) })
+        foreach (string state in new[] { "charging", "battery", "shortfall", "estimated", "missing" })
+        {
+            _settings.PanelTheme = palette; theme.GetMethod("Use", Program.Any)!.Invoke(null, [_settings, false, false]);
+            _settings.PanelScale = scale; _settings.MonitorWidth = width; _settings.MonitorHeight = height;
+            var sample = Sample(state); Program.SetProperty(sampler, "Latest", sample); Refresh(); await Settle();
+            var view = (FrameworkElement)Program.Field(_deck, "_powerDetail")!;
+            Program.Call(view, "Update", [typeof(MonitorSnapshot), typeof(bool?)], sample, state == "missing" ? (bool?)null : state != "battery");
+            await Settle();
+            var back = (FrameworkElement)view.GetType().GetProperty("BackButton", Program.Any)!.GetValue(view)!;
+            if (back.ActualWidth < 55 || back.ActualHeight < 24) throw new InvalidOperationException("Power return control is clipped.");
+            foreach (var field in new[] { "_status", "_source", "_batteryInfo", "_fanValue", "_cpuHeat", "_gpuHeat" })
+            {
+                var line = (FrameworkElement)Program.Field(view, field)!;
+                var bounds = line.TransformToAncestor(view).TransformBounds(new Rect(line.RenderSize));
+                if (bounds.Bottom > view.ActualHeight + .5) throw new InvalidOperationException($"{field} clipped by power content.");
+            }
+            var nodes = Nodes(view).OfType<FrameworkElement>().Where(e => System.Windows.Automation.AutomationProperties.GetAutomationId(e).StartsWith("power-node-", StringComparison.Ordinal)).ToList();
+            if (nodes.Count != 6) throw new InvalidOperationException("Power details lost a node.");
+            foreach (var node in nodes)
+            {
+                var box = node.TransformToAncestor(view).TransformBounds(new Rect(node.RenderSize));
+                if (box.Left < -.5 || box.Top < -.5 || box.Right > view.ActualWidth + .5 || box.Bottom > view.ActualHeight + .5) throw new InvalidOperationException($"Power node exceeds content at {width}x{height}.");
+                var value = (System.Windows.Controls.TextBlock)Program.Field(node, "<Value>k__BackingField")!;
+                if (value.TextTrimming != TextTrimming.None) throw new InvalidOperationException("Power numeric value can be ellipsized.");
+                if (state == "missing" && value.Text != "—" && !System.Windows.Automation.AutomationProperties.GetAutomationId(node).EndsWith("ac")) throw new InvalidOperationException("Missing telemetry became a value.");
+            }
+            var scroll = (System.Windows.Controls.ScrollViewer)Program.Field(_deck, "_powerDetailScroll")!;
+            if (height == 140 && scroll.ScrollableHeight <= 0) throw new InvalidOperationException("Short panels must make all content reachable by scrolling.");
+            if (height == 140)
+            {
+                scroll.ScrollToBottom(); await Settle();
+                if (scroll.VerticalOffset <= 0) throw new InvalidOperationException("Short power details did not scroll.");
+                scroll.ScrollToTop();
+            }
+            if (state == "estimated" && ((System.Windows.Controls.TextBlock)Program.Field(view, "_origin")!).Text != Loc.T("组件估算", "Component estimate")) throw new InvalidOperationException("Component sum mislabeled as measured system power.");
+            rendered++;
+            if (scale == 100 && (width == 1008 || width == 440 && state == "charging")) await SaveAiIsland($"power-{state}-{palette}-{width}x{height}");
+        }
+        var detail = (FrameworkElement)Program.Field(_deck, "_powerDetail")!;
+        var ribbons = (FrameworkElement)Program.Field(detail, "_ribbons")!;
+        Program.Call(detail, "SetActive", [typeof(bool)], true);
+        if (((TranslateTransform)Program.Field(ribbons, "_forwardPhase")!).HasAnimatedProperties is false) throw new InvalidOperationException("Power flow animation did not start.");
+        Program.Call(detail, "SetActive", [typeof(bool)], false);
+        if (((TranslateTransform)Program.Field(ribbons, "_forwardPhase")!).HasAnimatedProperties) throw new InvalidOperationException("Hidden power animation remains active.");
+        ((System.Windows.Controls.Button)detail.GetType().GetProperty("BackButton", Program.Any)!.GetValue(detail)!).RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        await Settle();
+        if (Program.Field(_deck, "_powerDetails") is not false) throw new InvalidOperationException("Back button did not restore monitor overview.");
+        // Actual pointer activation also uses the row's details callback, including its battery region.
+        _settings.MonitorWidth = 1008; _settings.MonitorHeight = 300; Refresh(); await Settle();
+        monitor = Program.Field(_deck, "_monitorView")!; link = (FrameworkElement)Program.Field(monitor, "_power")!;
+        link.RaiseEvent(new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left) { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+        await Settle();
+        if (Program.Field(_deck, "_powerDetails") is not true) throw new InvalidOperationException("Clicking power did not navigate to details.");
+        var keySource = System.Windows.Interop.HwndSource.FromHwnd(new System.Windows.Interop.WindowInteropHelper(_deck).EnsureHandle())!;
+        _deck.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, keySource, 0, System.Windows.Input.Key.Escape) { RoutedEvent = System.Windows.Input.Keyboard.PreviewKeyDownEvent });
+        await Settle();
+        if (Program.Field(_deck, "_powerDetails") is not false) throw new InvalidOperationException("Esc did not return to monitor overview.");
+        monitor = Program.Field(_deck, "_monitorView")!; link = (FrameworkElement)Program.Field(monitor, "_power")!;
+        link.RaiseEvent(new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice, keySource, 0, System.Windows.Input.Key.Space) { RoutedEvent = System.Windows.Input.Keyboard.KeyDownEvent });
+        await Settle();
+        if (Program.Field(_deck, "_powerDetails") is not true) throw new InvalidOperationException("Space did not activate the focused power link.");
+        SelectPage(DeckPage.Usage); await Settle();
+        if (Program.Field(_deck, "_powerDetails") is not false) throw new InvalidOperationException("Leaving Monitor retained its nested route.");
+        Program.Call(_deck, "ClosePowerDetails", []); await Settle();
+        if (((FrameworkElement)_deck.FindName("MonitorContent")!).Visibility == Visibility.Visible) throw new InvalidOperationException("A stale return callback reopened monitor details.");
+        Program.SetProperty(app, "Monitor", null);
+        Console.WriteLine($"PASS: {rendered} power detail layouts ({language}); link, return, scrolling, sensor demand, animation cleanup and unchanged top-level tabs.");
     }
 
     private async Task QuotaForecastScenes()

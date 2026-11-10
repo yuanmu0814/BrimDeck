@@ -263,6 +263,7 @@ internal sealed class BatteryProvider
 
     // Whether the machine is on mains now (a laptop that gives no power reading there may give one on battery).
     public static bool OnMains => GetSystemPowerStatus(out var status) && status.ACLineStatus == 1;
+    public static bool? MainsConnection => GetSystemPowerStatus(out var status) ? status.ACLineStatus switch { 0 => false, 1 => true, _ => (bool?)null } : null;
 
     public (BatteryInputs Inputs, Reading<BatterySample> Sample) Sample()
     {

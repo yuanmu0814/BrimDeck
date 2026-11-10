@@ -175,7 +175,7 @@ public partial class MainWindow : Window
         // The collapsed island opens on hover, so a right click there does nothing, except leave move mode.
         MouseWheel += PanelWheel;
         MouseRightButtonUp += (_, e) => { if (_moveArmed) { CancelMove(); e.Handled = true; return; } if (!_expanded || !Settings.RightClickSettings) return; _app.OpenSettings(); e.Handled = true; };
-        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { SetExpanded(false, keyboard: true); e.Handled = true; } };
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { if (ShowingPowerDetails) ClosePowerDetails(); else SetExpanded(false, keyboard: true); e.Handled = true; } };
         // A scale change moves the window to a rectangle Windows suggests; the island is centred again.
         // DpiChanged is a bubbling event: every Image raises it when its own DPI changes. Once the window has moved to a
         // monitor with another scale, each image the panel rebuilds while it is laid out reports a change, and laying out

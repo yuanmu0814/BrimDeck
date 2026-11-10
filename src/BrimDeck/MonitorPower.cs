@@ -10,14 +10,14 @@ namespace BrimDeck;
 // What the page needs to build the power lines: the look of the theme, the low-battery threshold and whether this machine has a battery.
 // Quick: the battery as the system itself says it at once (BatteryProvider.Quick), shown until the sampler's first reading arrives.
 // Animate: the page is being opened for the first time (not rebuilt for a new size), so the rows come in.
-internal sealed record PowerOptions(PowerStyle Style, int Low, bool Battery, Reading<BatterySample> Quick = default, bool Animate = false);
+internal sealed record PowerOptions(PowerStyle Style, int Low, bool Battery, Reading<BatterySample> Quick = default, bool Animate = false, Action? OpenDetails = null);
 
 // The whole machine's power draw and its own battery, under the drives on the monitor page. As memory and network are drawn, it is one
 // element that renders directly: a new reading changes what it draws, never the layout, and the battery's fill eases to each reading.
 //
 // It is one line, laid out as the page's other lines are (memory, network, the drives): a glyph in the room a dial takes, then the
 // figure right-aligned in the room of its widest and its small unit after it, so the unit does not move. The power: a bolt, the watts,
-// the name of what they are of ("整机", "CPU", "GPU"; a click on the power part switches), the last minute of it as a curve that fills
+// the name of what they are of ("整机"; a click opens power details), the last minute of it as a curve that fills
 // the line, and its mean since the page opened at the curve's end. On a machine with a battery,
 // the battery closes the line as one group: the time left or to full where there is one ("剩余 1:42", "充满 0:40"), its drawing (the
 // gauge, with a plug at its corner on mains), and the charge, its "%" ending where the drives' "°C" ends; the curve ends before it.
@@ -41,9 +41,6 @@ internal sealed class PowerBlock : FrameworkElement
     private IReadOnlyList<double> _history = [];
     private PowerSummary? _summary;
     private PowerTrack _cpu = PowerTrack.None, _gpu = PowerTrack.None;
-    // What the line shows: the whole machine, the CPU or the GPU, switched by a click on the power part. Kept for the session, so a page
-    // built again (a new size) shows the same.
-    private static PowerView _view = PowerView.Whole;
     private string _spoken = "";
     // The watts that reach the top of the curve, worked out once per reading.
     private double _top = 10;
@@ -52,6 +49,11 @@ internal sealed class PowerBlock : FrameworkElement
     {
         _colors = colors; _options = options; _body = body; _caption = caption; _row = row;
         Height = row;
+        Focusable = options.OpenDetails is not null;
+        Cursor = options.OpenDetails is not null ? Cursors.Hand : null;
+        System.Windows.Automation.AutomationProperties.SetAutomationId(this, "monitor-power-details-link");
+        System.Windows.Automation.AutomationProperties.SetHelpText(this, Loc.T("打开功耗详情", "Open power details"));
+        IsKeyboardFocusedChanged += (_, _) => InvalidateVisual();
         SnapsToDevicePixels = true;
         _battery = options.Quick;
         ToolTip = _tip;
@@ -59,7 +61,8 @@ internal sealed class PowerBlock : FrameworkElement
     }
 
     // For screen readers: the items in one line (PowerText.Spoken).
-    protected override AutomationPeer OnCreateAutomationPeer() => new SpokenPeer(this, () => _spoken);
+    protected override AutomationPeer OnCreateAutomationPeer() => _options.OpenDetails is null ? new SpokenPeer(this, () => _spoken)
+        : new DrawnPeer(this, AutomationControlType.Hyperlink, () => Loc.T("打开功耗详情，", "Open power details, ") + _spoken, OpenDetails);
 
     private PowerStyle Skin => _options.Style;
     private bool Shared => _options.Battery;
@@ -95,26 +98,7 @@ internal sealed class PowerBlock : FrameworkElement
     private static double Top(IReadOnlyList<double> history) => history.Count == 0 ? 10 : Math.Max(10, history.Max() * 1.15);
 
     // What the line shows now: the figure (none where the view's part was not read this time), its last minute, and its peak and mean.
-    private (double? Watts, IReadOnlyList<double> History, PowerSummary? Summary) Shown()
-    {
-        var sample = _power.OrDefault;
-        return _view switch
-        {
-            PowerView.Cpu => (sample is null ? null : PowerResolver.PartWatts(sample, "cpu"), _cpu.History, _cpu.Summary),
-            PowerView.Gpu => (sample is null ? null : PowerResolver.PartWatts(sample, "gpu"), _gpu.History, _gpu.Summary),
-            _ => (sample?.Watts, _history, _summary)
-        };
-    }
-
-    // The views this machine has: the whole machine always; the CPU and the GPU once they have been read (a GPU at rest is not read, but
-    // is listed as not read, and can be chosen to see why).
-    private bool Has(PowerView view) => view switch
-    {
-        PowerView.Cpu => _cpu.History.Count > 0 || _power.OrDefault is { } s && PowerResolver.PartWatts(s, "cpu") is not null,
-        PowerView.Gpu => _gpu.History.Count > 0 || _power.OrDefault is { } g && (PowerResolver.PartWatts(g, "gpu") is not null || g.Missing.Count > 0),
-        _ => true
-    };
-    private IEnumerable<PowerView> Views => Enum.GetValues<PowerView>().Where(Has);
+    private (double? Watts, IReadOnlyList<double> History, PowerSummary? Summary) Shown() => (_power.OrDefault?.Watts, _history, _summary);
 
     // One tooltip whose content follows the readings, so an open one shows each new reading: the power's table or the battery's lines,
     // whichever part is under the pointer. Built only as it opens and while it is open, not for every reading nobody looks at.
@@ -177,22 +161,24 @@ internal sealed class PowerBlock : FrameworkElement
     {
         base.OnMouseMove(e);
         bool over = OverBattery(e.GetPosition(this));
-        Cursor = over ? null : Cursors.Hand;
+        Cursor = _options.OpenDetails is not null ? Cursors.Hand : null;
         if (over == _overBattery) return;
         _overBattery = over;
         Tip();
     }
-    // A click on the power part shows the next view this machine has: whole machine, CPU, GPU, then the whole machine again.
+    private void OpenDetails() { _tip.IsOpen = false; _options.OpenDetails?.Invoke(); }
+    // The whole line, battery included, opens details instead of cycling system / CPU / GPU figures.
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonUp(e);
-        if (OverBattery(e.GetPosition(this))) return;
+        if (_options.OpenDetails is null) return;
         e.Handled = true;
-        var views = Views.ToList();
-        _view = views[(views.IndexOf(_view) + 1) % views.Count];
-        _top = Top(Shown().History);
-        Tip();
-        InvalidateVisual();
+        OpenDetails();
+    }
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (_options.OpenDetails is not null && e.Key is Key.Enter or Key.Space) { e.Handled = true; OpenDetails(); }
     }
 
     protected override Size MeasureOverride(Size availableSize) => new(0, Height);
@@ -268,6 +254,7 @@ internal sealed class PowerBlock : FrameworkElement
             Row(second, () => Battery(drawing, line, ppd, places, now));
         }
         Row(first, () => Power(drawing, new Rect(0, 0, end, _row), ppd, c, now));
+        if (IsKeyboardFocused) drawing.DrawRoundedRectangle(null, new Pen(UI.Brush(UI.Accent), 1), new Rect(.5, .5, Math.Max(0, w - 1), Math.Max(0, ActualHeight - 1)), 3, 3);
     }
 
     private double BaselineOf(Rect line) => Math.Round(line.Y + line.Height / 2 + _body * .38);
@@ -299,7 +286,7 @@ internal sealed class PowerBlock : FrameworkElement
             known ? Skin.Draw : UI.Tertiary, Skin, ppd);
         double right = line.X + c.Figure + c.Number;
         FigureAt(drawing, watts is { } figure ? PowerFormat.Compact(figure, 9999) : "—", watts is null ? "" : "W", UI.Primary, line, ppd, right, right + 3);
-        MonitorDraw.Baseline(drawing, MonitorDraw.Text(PowerText.ViewName(_view), _caption, UI.Secondary, ppd), line.X + c.Label, BaselineOf(line));
+        MonitorDraw.Baseline(drawing, MonitorDraw.Text(PowerText.ViewName(PowerView.Whole), _caption, UI.Secondary, ppd), line.X + c.Label, BaselineOf(line));
         if (!known) return;
         double curveLeft = line.X + c.Middle, curveRight = line.Right;
         // The mean keeps its room from the start, so the curve does not shrink when it appears; a line too short for both has the curve only.

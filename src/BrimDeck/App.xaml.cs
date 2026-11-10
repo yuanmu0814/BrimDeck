@@ -360,7 +360,7 @@ public partial class App : Application
         }
         // What is read besides the usage is set before the sampler starts, so its first collection already holds it.
         UpdateMonitorExtras();
-        Monitor.SetDemand(wanted, Settings.MonitorInterval, _presentingMonitor.Count > 0);
+        Monitor.SetDemand(wanted, Settings.MonitorInterval, _presentingMonitor.Any(deck => !deck.ShowingPowerDetails));
     }
     // Temperatures and drives are read for an open page with them on; also for a collapsed row showing them: the processor's and
     // the graphics adapter's temperatures for a ring showing its own, the drives for the drive reading, and their temperatures when
@@ -369,6 +369,7 @@ public partial class App : Application
     internal void UpdateMonitorExtras()
     {
         bool page = _presentingMonitor.Count > 0;
+        bool overview = _presentingMonitor.Any(deck => !deck.ShowingPowerDetails);
         bool strip = _stripMonitor.Count > 0;
         var shown = strip ? Core.CompactMonitor.Shown(Settings.CompactReadings) : CompactMonitorItems.None;
         var held = _heldStrip.Count > 0 ? Core.CompactMonitor.Shown(Settings.CompactReadings) : CompactMonitorItems.None;
@@ -376,12 +377,12 @@ public partial class App : Application
             && (item == CompactMonitorItems.Storage || reading.ShowValue) && CompactFigures.Shows(reading, CompactFigures.Temperature);
         bool stripDrives = (shown & CompactMonitorItems.Storage) != 0;
         Monitor?.SetExtras(page && Settings.MonitorTemperatures || Heat(CompactMonitorItems.Cpu, held) || Heat(CompactMonitorItems.Gpu, held),
-            page && Settings.MonitorStorage || stripDrives,
-            page && Settings.MonitorStorage && Settings.MonitorTemperatures || Heat(CompactMonitorItems.Storage, shown),
+            overview && Settings.MonitorStorage || stripDrives,
+            overview && Settings.MonitorStorage && Settings.MonitorTemperatures || Heat(CompactMonitorItems.Storage, shown),
             // The watts (the counters, NVIDIA's helper) only for a page that shows the power line or a row that chose the reading; the battery
             // alone also for the row's charge reading.
-            _presentingPower.Count > 0 && Settings.MonitorPower && PowerKnownToExist || (shown & CompactMonitorItems.Power) != 0,
-            (shown & CompactMonitorItems.Charge) != 0,
+            _presentingPower.Count > 0 && PowerKnownToExist || (shown & CompactMonitorItems.Power) != 0,
+            _presentingMonitor.Any(deck => deck.ShowingPowerDetails) || (shown & CompactMonitorItems.Charge) != 0,
             // The frame rate for a row that shows it, or an open page with room for its line.
             (shown & CompactMonitorItems.Frames) != 0 || Settings.MonitorFrames && _presentingMonitor.Any(deck => deck.PageShowsFrames),
             // The graphics adapters for the page and the row's GPU reading (the power asks for them itself).

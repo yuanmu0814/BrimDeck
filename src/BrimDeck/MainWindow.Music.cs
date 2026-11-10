@@ -143,6 +143,7 @@ public partial class MainWindow
     private FrameworkElement PageContent(DeckPage page) => page switch { DeckPage.Music => MusicContent, DeckPage.Monitor => MonitorContent, _ => UsageContent };
     private void ShowPage(DeckPage page, bool animatePage)
     {
+        if (page != DeckPage.Monitor) { _powerDetails = false; _powerDetail?.SetActive(false); }
         _detailPopup?.Close(); _details = false; _page = page; _musicRenderKey = ""; _handover.Drop();
         ApplySettings(animatePage);
     }

@@ -91,6 +91,8 @@ Works with players that use Windows media controls, with extra support for some 
 
 ### System monitor
 
+- Click the power/battery row to open energy-flow details inside the monitor page. Use Back or Esc to return. The view includes available system and component power, battery charge/discharge, history, fans and temperatures; it distinguishes component estimates and leaves unsupported readings unknown. It adds no top-level tab. Charger input power is currently unavailable and shown as unknown.
+
 <img src="docs/en-US/images/monitor.png" width="100%" alt="System monitor page: CPU usage and each core, GPU, memory, network speed and the busiest apps">
 
 - Shows CPU, GPU and memory usage and network speed in real time, along with the usage of each core. With more than one graphics card, the discrete one shows by default; click the large GPU reading to show the next card, or choose one under Settings › System monitor › GPU.

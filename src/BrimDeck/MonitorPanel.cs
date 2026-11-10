@@ -39,6 +39,7 @@ public partial class MainWindow
         // being read, and takes the current readings when the display is back.
         bool shown = _expanded && IsMonitorPage && IsVisible && !IsSuppressed;
         bool page = shown && !DisplayPower.Off;
+        _powerDetail?.SetActive(page && _powerDetails && MonitorMotion);
         // A row whose chosen readings all wait for their first figures has no width, yet must be read for them (StripAwaits). A row
         // only hidden for now (the panel open, or a notice in its place, which leaves no row built: RenderCompact) keeps its
         // temperatures read while the sampler runs (App.UpdateMonitorExtras).
@@ -52,12 +53,13 @@ public partial class MainWindow
         }
         _monitorShown = shown;
         // The power is read for a page that shows its line (a page too small for it, or with the setting off, reads none of it).
-        bool power = page && Settings.MonitorPower && _monitorView?.ShowsPower == true;
+        bool power = page && (_powerDetails || Settings.MonitorPower && _monitorView?.ShowsPower == true);
         _powerPage = power;
         _app.PresentMonitor(this, page, strip, power, heldStrip);
         // Neither took readings while hidden: they show the current ones, or dashes once the sampler has paused, never the
         // figures they showed last time.
-        if (page && !_monitorShowing) _monitorView?.Update(_app.Monitor?.Latest ?? WaitingSnapshot, motion: false);
+        if (page && _powerDetails) UpdatePowerDetails(_app.Monitor?.Latest ?? WaitingSnapshot);
+        else if (page && !_monitorShowing) _monitorView?.Update(_app.Monitor?.Latest ?? WaitingSnapshot, motion: false);
         if (strip && !_stripShowing) UpdateCompactStrips(_app.Monitor?.Latest, motion: false);
         _monitorShowing = page; _stripShowing = strip;
     }
@@ -72,8 +74,8 @@ public partial class MainWindow
         Charge = monitor.BatterySensor, Frames = monitor.FramesSensor, Fans = monitor.FansSensor
     } : SensorStates.Unknown;
     // Whether this panel's open page shows the frame rate's line (its layout had room for it): the frame rate is read for it then.
-    internal bool PageShowsFrames => _monitorView?.ShowsFrames == true;
-    internal bool PageShowsFans => _monitorView?.ShowsFans == true;
+    internal bool PageShowsFrames => !_powerDetails && _monitorView?.ShowsFrames == true;
+    internal bool PageShowsFans => _powerDetails || _monitorView?.ShowsFans == true;
     // Whether this surface shows the system readings and waits for the first figures of one it does not show yet.
     private bool StripAwaits()
     {
@@ -82,8 +84,8 @@ public partial class MainWindow
     }
     // animate: the page is built for the first time, not for a new size, so its power rows come in (PowerOptions.Animate).
     private PowerOptions PowerBlockFor(bool animate) => Native.BatteryProvider.SystemHasBattery
-        ? new(PowerStyle.For(MonitorThemeColors.For(Settings)), BatteryModel.LowPercent, true, Native.BatteryProvider.Quick(), animate)
-        : new(PowerStyle.For(MonitorThemeColors.For(Settings)), BatteryModel.LowPercent, false, default, animate);
+        ? new(PowerStyle.For(MonitorThemeColors.For(Settings)), BatteryModel.LowPercent, true, Native.BatteryProvider.Quick(), animate, OpenPowerDetails)
+        : new(PowerStyle.For(MonitorThemeColors.For(Settings)), BatteryModel.LowPercent, false, default, animate, OpenPowerDetails);
     private static MonitorSnapshot WaitingSnapshot => MonitorSnapshot.Empty(Environment.ProcessorCount, Loc.T("正在读取", "Reading"));
 
     private bool MonitorMotion => Settings.Animations && SystemParameters.ClientAreaAnimation;
@@ -102,7 +104,9 @@ public partial class MainWindow
             if (_compactStrip is null) { UpdateMonitorDemand(); return; }
             UpdateCompactStrips(snapshot, MonitorMotion && Settings.CompactSmoothing != CompactSmoothing.Off); return;
         }
-        if (!IsMonitorPage || _monitorView is null) return;
+        if (!IsMonitorPage) return;
+        if (_powerDetails) { UpdatePowerDetails(snapshot); return; }
+        if (_monitorView is null) return;
         if (MonitorKey() != _monitorKey)
         {
             // Rebuilt because a kind of sensor turned out to have none (or turned up), the page fades in rather than cuts.
@@ -171,6 +175,7 @@ public partial class MainWindow
         ApplyHeader(Settings.UsagePage ? header.WithControlsOf(CachedUsageHeader()) : header);
         MonitorContent.Margin = new Thickness(_header.Side, 0, _header.Side, MonitorBottom(height));
         Motion.Enabled = MonitorMotion;
+        if (_powerDetails) { RenderPowerDetails(); return; }
         var key = MonitorKey();
         bool fade = _monitorFade; _monitorFade = false;
         if (_monitorView is not null && key == _monitorKey && MonitorContent.Children.Contains(_monitorView)) return;
