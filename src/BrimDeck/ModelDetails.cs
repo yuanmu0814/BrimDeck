@@ -17,6 +17,7 @@ public partial class MainWindow
     private ScrollViewer? _modelScroll;
     private double _modelScrollOffset;
     private Window? _detailPopup;
+    private bool _modelTrendCost;
     internal UsageDateRange ModelRange => _customRange ?? UsageDateRange.Recent(_days, DateTime.Today);
 
     private Button DetailLink(UIElement content, string name, Action click)
@@ -318,7 +319,8 @@ public partial class MainWindow
 
     private void RenderModels(IReadOnlyList<ProviderSnapshot> snapshots)
     {
-        var result = ModelUsage.Filter(snapshots, _modelApps, ModelRange);
+        var range = ModelRange;
+        var result = ModelUsage.Filter(snapshots, _modelApps, range);
         bool expanded = ContentCanvas.Width >= 600, compact = ContentCanvas.Width < 640 || ContentCanvas.Height < 170, tiny = ContentCanvas.Height < 170;
         double font = tiny ? 11.5 : 12.5, rowHeight = tiny ? 22 : 27, headerHeight = tiny ? 18 : 22, totalHeight = tiny ? 24 : 29;
         double inset = tiny ? 14 : 20, gap = expanded ? 8 : 12;
@@ -394,6 +396,9 @@ public partial class MainWindow
         }
         panel.Children.Add(new Border { Child = Row(Loc.T("应用", "App"), Loc.T("模型", "Model"), headings, true, false), BorderBrush = UI.Brush(UI.Hairline), BorderThickness = new Thickness(0, 0, 0, 1) });
         var list = new StackPanel();
+        // Keep the trend inside the scroll area, so the table is reachable even in a short panel.
+        double viewport = ContentCanvas.Height - _header.Row - headerHeight - totalHeight - UsageContent.Margin.Bottom;
+        if (result.Rows.Count > 0) list.Children.Add(ModelTrendChart(result, range, tiny, viewport));
         for (int i = 0; i < result.Rows.Count; i++)
         {
             var record = result.Rows[i];
@@ -440,5 +445,52 @@ public partial class MainWindow
         }
         var footer = new Border { Child = totalRow, BorderBrush = UI.Brush(UI.Outline), BorderThickness = new Thickness(0, 1, 0, 0) };
         Grid.SetRow(footer, 2); panel.Children.Add(footer); UsageContent.Children.Add(panel);
+    }
+
+    private FrameworkElement ModelTrendChart(ModelUsageResult result, UsageDateRange range, bool tiny, double viewport)
+    {
+        var days = UsageTrend.Days(result.Entries, range, _app.Prices.Summarize);
+        string color = _modelApps.Count == 1 ? StatisticsTheme(_modelApps.Single()) : UI.Accent;
+        int buttonHeight = tiny ? 18 : 20;
+        double headingGap = tiny ? 1 : 3, top = tiny ? 2 : 5, bottom = tiny ? 2 : 8;
+        // Reserve the header, toggle border and separator before sizing the chart for a compact viewport.
+        double plotHeight = Math.Clamp(viewport - buttonHeight - headingGap - top - bottom - 4, 26, tiny ? 53 : 84);
+        var graph = new UsageTrendGraph(range, days, color, result.IncompleteProviders.Count > 0, plotHeight);
+        var heading = new Grid { Margin = new Thickness(0, 0, 0, headingGap) };
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        heading.ColumnDefinitions.Add(new ColumnDefinition());
+        heading.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var title = UI.Centered(Loc.T("用量趋势", "Usage trend"), 11, UI.Primary, FontWeights.SemiBold);
+        heading.Children.Add(title);
+        var peak = UI.Centered("", 11, UI.Secondary);
+        peak.TextTrimming = TextTrimming.CharacterEllipsis;
+        peak.Margin = new Thickness(9, 0, 5, 0);
+        Grid.SetColumn(peak, 1);
+        heading.Children.Add(peak);
+
+        Button tokenButton = null!, costButton = null!;
+        void SelectMetric(bool cost)
+        {
+            _modelTrendCost = cost;
+            graph.SetMetric(cost);
+            peak.Text = graph.PeakText;
+            peak.ToolTip = peak.Text;
+            tokenButton.Tag = cost ? null : "Selected";
+            costButton.Tag = cost ? "Selected" : null;
+            AutomationProperties.SetItemStatus(tokenButton, cost ? "" : Loc.T("已选中", "Selected"));
+            AutomationProperties.SetItemStatus(costButton, cost ? Loc.T("已选中", "Selected") : "");
+        }
+        tokenButton = ModelAction(Loc.T("Token", "Tokens"), Loc.T("按 Token 显示", "Show tokens"), () => SelectMetric(false), style: "SegmentButton", height: buttonHeight, toolTip: false);
+        costButton = ModelAction(Loc.T("费用", "Cost"), Loc.T("按费用显示", "Show cost"), () => SelectMetric(true), style: "SegmentButton", height: buttonHeight, toolTip: false);
+        AutomationProperties.SetAutomationId(tokenButton, "model-trend-tokens");
+        AutomationProperties.SetAutomationId(costButton, "model-trend-cost");
+        var toggle = new Border { Child = new StackPanel { Orientation = Orientation.Horizontal, Children = { tokenButton, costButton } },
+            Background = UI.Brush(UI.Fill), CornerRadius = new CornerRadius(PanelTheme.Corner(6)), Padding = new Thickness(1) };
+        Grid.SetColumn(toggle, 2);
+        heading.Children.Add(toggle);
+        SelectMetric(_modelTrendCost);
+
+        var block = new StackPanel { Children = { heading, graph } };
+        return new Border { Child = block, BorderBrush = UI.Brush(UI.Hairline), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(3, top, 3, bottom) };
     }
 }
